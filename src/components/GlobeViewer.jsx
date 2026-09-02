@@ -97,14 +97,37 @@ function getLabelStyle(level) {
   }
 }
 
-// Sentinel-2 Cloudless yearly mosaics from EOX (2017-2024)
+// Applies SAR Sim, NDVI Infrared, or Hybrid color filters to any imagery layer
+function applyLayerFilter(layer, mode) {
+  if (!layer) return;
+  switch (mode) {
+    case 'sar':
+      layer.saturation = 0.0;
+      layer.contrast = 1.8;
+      layer.brightness = 1.25;
+      layer.hue = 0.0;
+      break;
+    case 'ndvi':
+      layer.saturation = 2.8;
+      layer.contrast = 1.6;
+      layer.brightness = 1.1;
+      layer.hue = 2.1; 
+      break;
+    default:
+      layer.saturation = 1.0;
+      layer.contrast = 1.0;
+      layer.brightness = 1.0;
+      layer.hue = 0.0;
+      break;
+  }
+}
+
 function getSentinelUrl(year) {
   const y = Math.min(Math.max(year, 2017), 2024);
   return `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-${y}_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg`;
 }
 
-// Multi-Decade Satellite Imagery Provider (2005 - 2026)
-// Correct WebMercatorTilingScheme ensures precise coordinate alignment at all zoom levels
+// Multi-Decade High-Resolution Satellite Imagery Provider (2005 - 2026)
 function getHistoricalImageryProvider(year) {
   if (year >= 2017) {
     const y = Math.min(Math.max(year, 2017), 2024);
@@ -112,10 +135,10 @@ function getHistoricalImageryProvider(year) {
       provider: new UrlTemplateImageryProvider({
         url: getSentinelUrl(y),
         tilingScheme: new WebMercatorTilingScheme(),
-        maximumLevel: 13, // EOX global tiles are Level 0-13, Cesium upscales smoothly beyond Level 13
-        credit: `ESA Sentinel-2 Cloudless ${y} (10m)`,
+        maximumLevel: 14,
+        credit: `ESA Sentinel-2 Cloudless ${y} (10m High-Res)`,
       }),
-      title: `🛰️ Sentinel-2 Cloudless ${y} (10m Resolution)`,
+      title: `🛰️ Sentinel-2 Cloudless ${y} (10m Optical)`,
     };
   } else {
     // NASA GIBS true-color global historical satellite archive (2005-2016)
@@ -125,7 +148,7 @@ function getHistoricalImageryProvider(year) {
       provider: new UrlTemplateImageryProvider({
         url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${dateStr}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
         tilingScheme: new WebMercatorTilingScheme(),
-        maximumLevel: 8,
+        maximumLevel: 9,
         credit: `NASA GIBS Global Archive ${y} (250m)`,
       }),
       title: `🌍 NASA GIBS Earth Archive ${y} (2005 Era)`,
@@ -159,32 +182,32 @@ export default function GlobeViewer() {
       initDoneRef.current = true;
 
       // Maximise tile streaming throughput & concurrency
-      RequestScheduler.maximumRequests = 48;
-      RequestScheduler.maximumRequestsPerServer = 24;
+      RequestScheduler.maximumRequests = 64;
+      RequestScheduler.maximumRequestsPerServer = 32;
       if (RequestScheduler.requestsByServer) {
         RequestScheduler.requestsByServer['server.arcgisonline.com:443'] = 32;
-        RequestScheduler.requestsByServer['tiles.maps.eox.at:443'] = 24;
-        RequestScheduler.requestsByServer['a.basemaps.cartocdn.com:443'] = 24;
-        RequestScheduler.requestsByServer['b.basemaps.cartocdn.com:443'] = 24;
-        RequestScheduler.requestsByServer['c.basemaps.cartocdn.com:443'] = 24;
+        RequestScheduler.requestsByServer['tiles.maps.eox.at:443'] = 32;
+        RequestScheduler.requestsByServer['a.basemaps.cartocdn.com:443'] = 32;
+        RequestScheduler.requestsByServer['b.basemaps.cartocdn.com:443'] = 32;
+        RequestScheduler.requestsByServer['c.basemaps.cartocdn.com:443'] = 32;
       }
 
-      // Globe & atmosphere rendering optimizations for instant tile streaming
+      // Globe & atmosphere rendering optimizations for instant tile streaming & sub-meter clarity
       const globe = viewer.scene.globe;
       globe.show = true;
       globe.enableLighting = false;
       globe.depthTestAgainstTerrain = false;
-      globe.tileCacheSize = 2500; // Keep up to 2500 tiles in memory for instantaneous panning
+      globe.tileCacheSize = 3500; // Keep up to 3500 tiles in memory for instantaneous panning
       globe.preloadAncestors = true; // Show low-res parent tiles instantly while high-res stream in (no gray gaps!)
       globe.preloadSiblings = true; // Preload adjacent tiles for silky smooth flying
-      globe.maximumScreenSpaceError = 2.0; // Optimal balance of crisp resolution & fast streaming
-      globe.loadingDescendantLimit = 16;
+      globe.maximumScreenSpaceError = 1.33; // Sharper tile rendering for crisp sub-meter resolution
+      globe.loadingDescendantLimit = 20;
       globe.backFaceCulling = true;
 
       viewer.scene.skyAtmosphere.show = true;
       viewer.scene.fog.enabled = true;
       viewer.scene.fog.density = 0.00012;
-      viewer.scene.fog.screenSpaceErrorFactor = 2.0;
+      viewer.scene.fog.screenSpaceErrorFactor = 1.5;
 
       // ── Remove default Bing base layer ──────────────────────────────────
       viewer.imageryLayers.removeAll();
@@ -199,6 +222,9 @@ export default function GlobeViewer() {
       });
       const baseLayer = viewer.imageryLayers.addImageryProvider(baseProvider);
       baseLayerRef.current = baseLayer;
+
+      // Apply initial filter if mode is set
+      applyLayerFilter(baseLayer, mapMode);
 
       // ── Layer 1: Roads & highways ───────────────────────────────────────
       const roadsProvider = new UrlTemplateImageryProvider({
@@ -311,6 +337,7 @@ export default function GlobeViewer() {
       if (baseLayerRef.current) {
         baseLayerRef.current.alpha = 1.0;
         baseLayerRef.current.show = true;
+        applyLayerFilter(baseLayerRef.current, mapMode);
       }
       setImageryToast(`🛰️ Live High-Resolution Satellite (${selectedYear})`);
     } else {
@@ -327,6 +354,9 @@ export default function GlobeViewer() {
       layer.show = true;
       sentinelLayerRef.current = layer;
 
+      // Apply active filter (SAR Sim / NDVI / Hybrid) to the historical layer!
+      applyLayerFilter(layer, mapMode);
+
       // Keep base layer as soft backdrop so globe never turns white
       if (baseLayerRef.current) {
         baseLayerRef.current.alpha = 0.2;
@@ -339,7 +369,15 @@ export default function GlobeViewer() {
     const t = setTimeout(() => setImageryToast(null), 4000);
     dispatch({ type: 'SET_IMAGERY_LOADING', payload: false });
     return () => clearTimeout(t);
-  }, [selectedYear, dispatch]);
+  }, [selectedYear, dispatch, mapMode]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MAP MODE FILTERS: Apply to BOTH base and historical layers
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    applyLayerFilter(baseLayerRef.current, mapMode);
+    applyLayerFilter(sentinelLayerRef.current, mapMode);
+  }, [mapMode]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ORBITAL: Render Real GeoJSON Change Polygons on the 3D Globe
@@ -458,7 +496,7 @@ export default function GlobeViewer() {
   }, [flyToTrigger]);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // LAYER TOGGLES & MAP MODE
+  // LAYER TOGGLES
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (labelsLayerRef.current) labelsLayerRef.current.show = labelsEnabled;
@@ -475,35 +513,6 @@ export default function GlobeViewer() {
   useEffect(() => {
     if (roadsLayerRef.current) roadsLayerRef.current.show = roadsEnabled;
   }, [roadsEnabled]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current?.cesiumElement;
-    if (!viewer) return;
-
-    // Apply color filters to simulate SAR / NDVI on the base imagery
-    if (baseLayerRef.current) {
-      switch (mapMode) {
-        case 'sar':
-          baseLayerRef.current.saturation = 0.0;
-          baseLayerRef.current.contrast = 1.8;
-          baseLayerRef.current.brightness = 1.2;
-          baseLayerRef.current.hue = 0.0;
-          break;
-        case 'ndvi':
-          baseLayerRef.current.saturation = 2.5;
-          baseLayerRef.current.contrast = 1.5;
-          baseLayerRef.current.brightness = 1.0;
-          baseLayerRef.current.hue = 2.0; 
-          break;
-        default:
-          baseLayerRef.current.saturation = 1.0;
-          baseLayerRef.current.contrast = 1.0;
-          baseLayerRef.current.brightness = 1.0;
-          baseLayerRef.current.hue = 0.0;
-          break;
-      }
-    }
-  }, [mapMode]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HUD: Track camera position
