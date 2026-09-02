@@ -13,4 +13,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"🚀 Starting ORBITAL Python Engine on http://{args.host}:{args.port}")
-    uvicorn.run("server.main:app", host=args.host, port=args.port, reload=False)
+    uvicorn.run("server.main:app", host=args.host, port=args.port, reload=True)
