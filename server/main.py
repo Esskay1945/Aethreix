@@ -45,6 +45,8 @@ class ChangeRequest(BaseModel):
 
 
 @app.get("/api/orbital/health")
+@app.get("/api/status")
+@app.get("/health")
 def health_check():
     return {
         "status": "online",
