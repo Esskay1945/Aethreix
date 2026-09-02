@@ -32,6 +32,11 @@ const initialState = {
   roadsEnabled: true,
   mapMode: 'hybrid', // 'satellite' | 'hybrid' | 'sar' | 'ndvi'
 
+  // ORBITAL GeoJSON Change Masks & Visual Evidence
+  activeChangeMaskGeoJSON: null,
+  showChangeMask: true,
+  activeAuditTrail: null,
+
   // Street View 360° Ground-Level Panorama
   streetViewOpen: false,
   streetViewTarget: null, // { lat, lon, heading, name }
@@ -77,6 +82,22 @@ function reducer(state, action) {
       }
       return { ...state, mapMode: mode, labelsEnabled: newLabels, roadsEnabled: newRoads };
     }
+
+    case 'SET_CHANGE_MASK':
+      return {
+        ...state,
+        activeChangeMaskGeoJSON: action.payload,
+        showChangeMask: true
+      };
+
+    case 'TOGGLE_CHANGE_MASK':
+      return { ...state, showChangeMask: !state.showChangeMask };
+
+    case 'CLEAR_CHANGE_MASK':
+      return { ...state, activeChangeMaskGeoJSON: null };
+
+    case 'SET_AUDIT_TRAIL':
+      return { ...state, activeAuditTrail: action.payload };
 
     case 'TOGGLE_STREET_VIEW': {
       const willOpen = !state.streetViewOpen;
@@ -191,6 +212,14 @@ export function AthreixProvider({ children }) {
     dispatch({ type: 'TOGGLE_STREET_VIEW', payload: customTarget });
   }, []);
 
+  const toggleChangeMask = useCallback(() => {
+    dispatch({ type: 'TOGGLE_CHANGE_MASK' });
+  }, []);
+
+  const setChangeMask = useCallback((geojson) => {
+    dispatch({ type: 'SET_CHANGE_MASK', payload: geojson });
+  }, []);
+
   const value = {
     state,
     dispatch,
@@ -199,6 +228,8 @@ export function AthreixProvider({ children }) {
     sendMessage,
     addAIMessage,
     toggleStreetView,
+    toggleChangeMask,
+    setChangeMask,
   };
 
   return (

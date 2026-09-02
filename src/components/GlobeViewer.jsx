@@ -24,6 +24,7 @@ import {
   LabelStyle,
   Cartesian2,
   ImageryLayer,
+  GeoJsonDataSource,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { useAthreix } from '../context/AthreixContext.jsx';
@@ -139,11 +140,12 @@ export default function GlobeViewer() {
   const labelsLayerRef = useRef(null);
   const sentinelLayerRef = useRef(null);
   const baseLayerRef = useRef(null);
+  const changeMaskDataSourceRef = useRef(null);
 
   const [imageryToast, setImageryToast] = useState(null);
 
   const { state, dispatch } = useAthreix();
-  const { flyToTrigger, cameraAction, selectedYear, labelsEnabled, roadsEnabled, mapMode } = state;
+  const { flyToTrigger, cameraAction, selectedYear, labelsEnabled, roadsEnabled, mapMode, activeChangeMaskGeoJSON, showChangeMask } = state;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // INIT: Set up the Cesium Viewer after component mounts
@@ -338,6 +340,59 @@ export default function GlobeViewer() {
     dispatch({ type: 'SET_IMAGERY_LOADING', payload: false });
     return () => clearTimeout(t);
   }, [selectedYear, dispatch]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ORBITAL: Render Real GeoJSON Change Polygons on the 3D Globe
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!initDoneRef.current) return;
+    const viewer = viewerRef.current?.cesiumElement;
+    if (!viewer) return;
+
+    // Clear previous change mask entities
+    if (changeMaskDataSourceRef.current) {
+      viewer.dataSources.remove(changeMaskDataSourceRef.current, true);
+      changeMaskDataSourceRef.current = null;
+    }
+
+    if (!activeChangeMaskGeoJSON || !showChangeMask) return;
+
+    (async () => {
+      try {
+        const dataSource = await GeoJsonDataSource.load(activeChangeMaskGeoJSON, {
+          stroke: Color.fromCssColorString('#ff3d00'),
+          fill: Color.fromCssColorString('rgba(255, 61, 0, 0.45)'),
+          strokeWidth: 3,
+          clampToGround: true,
+        });
+
+        // Style the polygon entities
+        dataSource.entities.values.forEach(entity => {
+          if (entity.polygon) {
+            entity.polygon.outline = true;
+            entity.polygon.outlineColor = Color.fromCssColorString('#00e5ff');
+            entity.polygon.outlineWidth = 2;
+            entity.polygon.height = 10;
+            entity.polygon.extrudedHeight = 35; // 3D Extrusions for detected change clusters
+          }
+        });
+
+        viewer.dataSources.add(dataSource);
+        changeMaskDataSourceRef.current = dataSource;
+
+        // Fly camera to the change bounding box
+        if (activeChangeMaskGeoJSON.bbox) {
+          const [minLon, minLat, maxLon, maxLat] = activeChangeMaskGeoJSON.bbox;
+          viewer.camera.flyTo({
+            destination: Cartesian3.fromDegrees((minLon + maxLon) / 2, (minLat + maxLat) / 2, 4500),
+            duration: 1.8,
+          });
+        }
+      } catch (err) {
+        console.warn('GeoJSON Change Mask rendering error:', err);
+      }
+    })();
+  }, [activeChangeMaskGeoJSON, showChangeMask]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CAMERA ACTIONS: Zoom, tilt, compass
