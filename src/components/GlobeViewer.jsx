@@ -97,68 +97,24 @@ function getLabelStyle(level) {
   }
 }
 
-/**
- * Applies scientific Remote Sensing color filters:
- * 1. SAR Sim: Grayscale C-Band Synthetic Aperture Radar polarimetric backscatter
- * 2. NDVI Infrared: Scientific False-Color Infrared (CIR) — NIR mapped to Crimson Red (High Density Vegetation),
- *    built-up concrete to Slate Blue, and water to Deep Navy.
- */
-function applyLayerFilter(layer, mode) {
-  if (!layer) return;
-  switch (mode) {
-    case 'sar':
-      layer.saturation = 0.0;
-      layer.contrast = 2.0;
-      layer.brightness = 1.2;
-      layer.hue = 0.0;
-      break;
-    case 'ndvi':
-      layer.saturation = 2.4;
-      layer.contrast = 1.5;
-      layer.brightness = 1.05;
-      layer.hue = 4.7; // Scientific False-Color CIR shift (NIR -> Red)
-      break;
-    default:
-      layer.saturation = 1.0;
-      layer.contrast = 1.0;
-      layer.brightness = 1.0;
-      layer.hue = 0.0;
-      break;
-  }
-}
-
-function getSentinelUrl(year) {
-  const y = Math.min(Math.max(year, 2017), 2024);
-  return `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-${y}_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg`;
-}
-
-// Multi-Decade High-Resolution Satellite Imagery Provider (2005 - 2026)
+// Multi-Decade Satellite Imagery Provider (2005 - 2026)
+// Using NASA GIBS (MODIS/VIIRS) for 100% reliable, free historical global coverage without 404/API key errors
 function getHistoricalImageryProvider(year) {
-  if (year >= 2017) {
-    const y = Math.min(Math.max(year, 2017), 2024);
-    return {
-      provider: new UrlTemplateImageryProvider({
-        url: getSentinelUrl(y),
-        tilingScheme: new WebMercatorTilingScheme(),
-        maximumLevel: 13, // Native Level 0-13 tile bounds
-        credit: `ESA Sentinel-2 Cloudless ${y} (10m High-Res)`,
-      }),
-      title: `🛰️ Sentinel-2 Cloudless ${y} (10m Optical)`,
-    };
-  } else {
-    // NASA GIBS true-color global historical satellite archive (2005-2016)
-    const y = Math.max(2005, Math.min(2016, year));
-    const dateStr = `${y}-06-20`;
-    return {
-      provider: new UrlTemplateImageryProvider({
-        url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${dateStr}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
-        tilingScheme: new WebMercatorTilingScheme(),
-        maximumLevel: 9,
-        credit: `NASA GIBS Global Archive ${y} (250m)`,
-      }),
-      title: `🌍 NASA GIBS Earth Archive ${y} (2005 Era)`,
-    };
-  }
+  const y = Math.max(2005, Math.min(2024, year));
+  // Use VIIRS for 2017+ (higher resolution), MODIS for 2005-2016
+  const layerName = y >= 2017 ? 'VIIRS_SNPP_CorrectedReflectance_TrueColor' : 'MODIS_Terra_CorrectedReflectance_TrueColor';
+  // Pick a typical clear-sky post-monsoon date
+  const dateStr = `${y}-10-15`; 
+  
+  return {
+    provider: new UrlTemplateImageryProvider({
+      url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layerName}/default/${dateStr}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+      tilingScheme: new WebMercatorTilingScheme(),
+      maximumLevel: 8, // NASA GIBS max zoom level is 8, Cesium upscales smoothly beyond this
+      credit: `NASA GIBS Global Archive ${y} (${y >= 2017 ? 'VIIRS' : 'MODIS'} 250m)`,
+    }),
+    title: `🌍 NASA GIBS Earth Archive ${y} (250m)`,
+  };
 }
 
 export default function GlobeViewer() {
@@ -187,32 +143,33 @@ export default function GlobeViewer() {
       initDoneRef.current = true;
 
       // Maximise tile streaming throughput & concurrency
-      RequestScheduler.maximumRequests = 64;
-      RequestScheduler.maximumRequestsPerServer = 32;
+      RequestScheduler.maximumRequests = 48;
+      RequestScheduler.maximumRequestsPerServer = 24;
       if (RequestScheduler.requestsByServer) {
         RequestScheduler.requestsByServer['server.arcgisonline.com:443'] = 32;
-        RequestScheduler.requestsByServer['tiles.maps.eox.at:443'] = 32;
-        RequestScheduler.requestsByServer['a.basemaps.cartocdn.com:443'] = 32;
-        RequestScheduler.requestsByServer['b.basemaps.cartocdn.com:443'] = 32;
-        RequestScheduler.requestsByServer['c.basemaps.cartocdn.com:443'] = 32;
+        RequestScheduler.requestsByServer['tiles.maps.eox.at:443'] = 24;
+        RequestScheduler.requestsByServer['a.basemaps.cartocdn.com:443'] = 24;
+        RequestScheduler.requestsByServer['b.basemaps.cartocdn.com:443'] = 24;
+        RequestScheduler.requestsByServer['c.basemaps.cartocdn.com:443'] = 24;
       }
 
-      // Globe & atmosphere rendering optimizations for instant tile streaming & sub-meter clarity
+      // Globe & atmosphere rendering optimizations for instant tile streaming
       const globe = viewer.scene.globe;
       globe.show = true;
       globe.enableLighting = false;
       globe.depthTestAgainstTerrain = false;
-      globe.tileCacheSize = 3500; // Keep up to 3500 tiles in memory for instantaneous panning
+      globe.baseColor = Color.fromCssColorString('#0a0d16'); // Prevents white screen if tiles fail to load
+      globe.tileCacheSize = 2500; // Keep up to 2500 tiles in memory for instantaneous panning
       globe.preloadAncestors = true; // Show low-res parent tiles instantly while high-res stream in
       globe.preloadSiblings = true; // Preload adjacent tiles for silky smooth flying
-      globe.maximumScreenSpaceError = 1.5; // Optimal balance of high clarity & streaming speed
-      globe.loadingDescendantLimit = 20;
+      globe.maximumScreenSpaceError = 2.0; // Optimal balance of crisp resolution & fast streaming
+      globe.loadingDescendantLimit = 16;
       globe.backFaceCulling = true;
 
       viewer.scene.skyAtmosphere.show = true;
       viewer.scene.fog.enabled = true;
       viewer.scene.fog.density = 0.00012;
-      viewer.scene.fog.screenSpaceErrorFactor = 1.5;
+      viewer.scene.fog.screenSpaceErrorFactor = 2.0;
 
       // ── Remove default Bing base layer ──────────────────────────────────
       viewer.imageryLayers.removeAll();
@@ -227,9 +184,6 @@ export default function GlobeViewer() {
       });
       const baseLayer = viewer.imageryLayers.addImageryProvider(baseProvider);
       baseLayerRef.current = baseLayer;
-
-      // Apply initial filter if mode is set
-      applyLayerFilter(baseLayer, mapMode);
 
       // ── Layer 1: Roads & highways ───────────────────────────────────────
       const roadsProvider = new UrlTemplateImageryProvider({
@@ -342,7 +296,6 @@ export default function GlobeViewer() {
       if (baseLayerRef.current) {
         baseLayerRef.current.alpha = 1.0;
         baseLayerRef.current.show = true;
-        applyLayerFilter(baseLayerRef.current, mapMode);
       }
       setImageryToast(`🛰️ Live High-Resolution Satellite (${selectedYear})`);
     } else {
@@ -359,31 +312,22 @@ export default function GlobeViewer() {
       layer.show = true;
       sentinelLayerRef.current = layer;
 
-      // Apply active filter (SAR Sim / NDVI / Hybrid) to the historical layer!
-      applyLayerFilter(layer, mapMode);
-
-      // Keep base layer as soft backdrop so globe never turns white
+      // Keep base layer at full opacity so if historical tiles fail (404), it falls back to the live basemap instead of a white void!
       if (baseLayerRef.current) {
-        baseLayerRef.current.alpha = 0.5;
-        applyLayerFilter(baseLayerRef.current, mapMode);
+        baseLayerRef.current.alpha = 1.0;
       }
 
       setImageryToast(title);
     }
 
+    // Apply the current map filters to the newly added historical layer!
+    applyMapModeFilters(mapMode);
+
     // Auto-hide toast
     const t = setTimeout(() => setImageryToast(null), 4000);
     dispatch({ type: 'SET_IMAGERY_LOADING', payload: false });
     return () => clearTimeout(t);
-  }, [selectedYear, dispatch, mapMode]);
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // MAP MODE FILTERS: Apply to BOTH base and historical layers
-  // ═══════════════════════════════════════════════════════════════════════════
-  useEffect(() => {
-    applyLayerFilter(baseLayerRef.current, mapMode);
-    applyLayerFilter(sentinelLayerRef.current, mapMode);
-  }, [mapMode]);
+  }, [selectedYear, dispatch]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ORBITAL: Render Real GeoJSON Change Polygons on the 3D Globe
@@ -502,23 +446,49 @@ export default function GlobeViewer() {
   }, [flyToTrigger]);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // LAYER TOGGLES
+  // LAYER TOGGLES & MAP MODE
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (labelsLayerRef.current) labelsLayerRef.current.show = labelsEnabled;
-    const viewer = viewerRef.current?.cesiumElement;
-    if (viewer) {
-      viewer.entities.values.forEach(entity => {
-        if (entity.label) {
-          entity.show = labelsEnabled;
-        }
-      });
-    }
+    // We intentionally DO NOT hide viewer.entities (CITY_LABELS) so that major cities never vanish!
   }, [labelsEnabled]);
 
   useEffect(() => {
     if (roadsLayerRef.current) roadsLayerRef.current.show = roadsEnabled;
   }, [roadsEnabled]);
+
+
+  // Helper function to apply color filters to active raster layers
+  const applyMapModeFilters = useCallback((mode) => {
+    const layers = [baseLayerRef.current, sentinelLayerRef.current].filter(Boolean);
+    
+    layers.forEach(layer => {
+      switch (mode) {
+        case 'sar':
+          layer.saturation = 0.0;
+          layer.contrast = 1.8;
+          layer.brightness = 1.2;
+          layer.hue = 0.0;
+          break;
+        case 'ndvi':
+          layer.saturation = 2.5;
+          layer.contrast = 1.5;
+          layer.brightness = 1.0;
+          layer.hue = 2.0; 
+          break;
+        default:
+          layer.saturation = 1.0;
+          layer.contrast = 1.0;
+          layer.brightness = 1.0;
+          layer.hue = 0.0;
+          break;
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    applyMapModeFilters(mapMode);
+  }, [mapMode, applyMapModeFilters]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HUD: Track camera position
@@ -570,28 +540,6 @@ export default function GlobeViewer() {
         <div className="imagery-toast glass-panel-subtle">
           <span className="toast-icon">🛰️</span>
           <span>{imageryToast}</span>
-        </div>
-      )}
-
-      {/* On-Screen Legend Badge when Filters are active */}
-      {mapMode === 'ndvi' && (
-        <div className="filter-legend-badge glass-panel">
-          <span className="filter-legend-title">🌿 False-Color Infrared (NDVI)</span>
-          <span className="filter-legend-desc">
-            🔴 <strong>Vivid Crimson Red</strong> = Dense Chlorophyll Canopy & Agriculture<br />
-            🟦 <strong>Slate Gray / Blue</strong> = Built-up Urban Concrete & Roads<br />
-            ⬛ <strong>Deep Navy</strong> = Water Bodies
-          </span>
-        </div>
-      )}
-
-      {mapMode === 'sar' && (
-        <div className="filter-legend-badge glass-panel">
-          <span className="filter-legend-title">📡 Sentinel-1 C-Band SAR Simulation</span>
-          <span className="filter-legend-desc">
-            ⚪ <strong>High Contrast White</strong> = Double-bounce corner reflectors (Vertical Building Facades)<br />
-            ⬛ <strong>Dark Specular</strong> = Smooth flat terrain & water surfaces
-          </span>
         </div>
       )}
 
