@@ -97,21 +97,26 @@ function getLabelStyle(level) {
   }
 }
 
-// Applies SAR Sim, NDVI Infrared, or Hybrid color filters to any imagery layer
+/**
+ * Applies scientific Remote Sensing color filters:
+ * 1. SAR Sim: Grayscale C-Band Synthetic Aperture Radar polarimetric backscatter
+ * 2. NDVI Infrared: Scientific False-Color Infrared (CIR) — NIR mapped to Crimson Red (High Density Vegetation),
+ *    built-up concrete to Slate Blue, and water to Deep Navy.
+ */
 function applyLayerFilter(layer, mode) {
   if (!layer) return;
   switch (mode) {
     case 'sar':
       layer.saturation = 0.0;
-      layer.contrast = 1.8;
-      layer.brightness = 1.25;
+      layer.contrast = 2.0;
+      layer.brightness = 1.2;
       layer.hue = 0.0;
       break;
     case 'ndvi':
-      layer.saturation = 2.8;
-      layer.contrast = 1.6;
-      layer.brightness = 1.1;
-      layer.hue = 2.1; 
+      layer.saturation = 2.4;
+      layer.contrast = 1.5;
+      layer.brightness = 1.05;
+      layer.hue = 4.7; // Scientific False-Color CIR shift (NIR -> Red)
       break;
     default:
       layer.saturation = 1.0;
@@ -135,7 +140,7 @@ function getHistoricalImageryProvider(year) {
       provider: new UrlTemplateImageryProvider({
         url: getSentinelUrl(y),
         tilingScheme: new WebMercatorTilingScheme(),
-        maximumLevel: 14,
+        maximumLevel: 13, // Native Level 0-13 tile bounds
         credit: `ESA Sentinel-2 Cloudless ${y} (10m High-Res)`,
       }),
       title: `🛰️ Sentinel-2 Cloudless ${y} (10m Optical)`,
@@ -198,9 +203,9 @@ export default function GlobeViewer() {
       globe.enableLighting = false;
       globe.depthTestAgainstTerrain = false;
       globe.tileCacheSize = 3500; // Keep up to 3500 tiles in memory for instantaneous panning
-      globe.preloadAncestors = true; // Show low-res parent tiles instantly while high-res stream in (no gray gaps!)
+      globe.preloadAncestors = true; // Show low-res parent tiles instantly while high-res stream in
       globe.preloadSiblings = true; // Preload adjacent tiles for silky smooth flying
-      globe.maximumScreenSpaceError = 1.33; // Sharper tile rendering for crisp sub-meter resolution
+      globe.maximumScreenSpaceError = 1.5; // Optimal balance of high clarity & streaming speed
       globe.loadingDescendantLimit = 20;
       globe.backFaceCulling = true;
 
@@ -359,7 +364,8 @@ export default function GlobeViewer() {
 
       // Keep base layer as soft backdrop so globe never turns white
       if (baseLayerRef.current) {
-        baseLayerRef.current.alpha = 0.2;
+        baseLayerRef.current.alpha = 0.5;
+        applyLayerFilter(baseLayerRef.current, mapMode);
       }
 
       setImageryToast(title);
@@ -564,6 +570,28 @@ export default function GlobeViewer() {
         <div className="imagery-toast glass-panel-subtle">
           <span className="toast-icon">🛰️</span>
           <span>{imageryToast}</span>
+        </div>
+      )}
+
+      {/* On-Screen Legend Badge when Filters are active */}
+      {mapMode === 'ndvi' && (
+        <div className="filter-legend-badge glass-panel">
+          <span className="filter-legend-title">🌿 False-Color Infrared (NDVI)</span>
+          <span className="filter-legend-desc">
+            🔴 <strong>Vivid Crimson Red</strong> = Dense Chlorophyll Canopy & Agriculture<br />
+            🟦 <strong>Slate Gray / Blue</strong> = Built-up Urban Concrete & Roads<br />
+            ⬛ <strong>Deep Navy</strong> = Water Bodies
+          </span>
+        </div>
+      )}
+
+      {mapMode === 'sar' && (
+        <div className="filter-legend-badge glass-panel">
+          <span className="filter-legend-title">📡 Sentinel-1 C-Band SAR Simulation</span>
+          <span className="filter-legend-desc">
+            ⚪ <strong>High Contrast White</strong> = Double-bounce corner reflectors (Vertical Building Facades)<br />
+            ⬛ <strong>Dark Specular</strong> = Smooth flat terrain & water surfaces
+          </span>
         </div>
       )}
 

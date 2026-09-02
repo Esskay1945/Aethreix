@@ -1985,6 +1985,34 @@ html, body, #root {
   color: var(--text-secondary);
 }
 
+.filter-legend-badge {
+  position: absolute;
+  top: 80px;
+  right: calc(var(--space-lg) + 54px);
+  z-index: var(--z-hud);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  animation: slideDown 0.3s ease;
+}
+
+.filter-legend-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+.filter-legend-desc {
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1200px) {
   .chat-panel {
