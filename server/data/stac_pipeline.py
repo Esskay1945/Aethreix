@@ -1,11 +1,14 @@
 """
 ORBITAL STAC & Earth Observation Data Pipeline
-Fetches Copernicus Sentinel-2 optical & Sentinel-1 SAR scene metadata and imagery tiles.
+Fetches Copernicus Sentinel-2 optical scene metadata and imagery tiles.
+
+IMPORTANT: No fake NIR synthesis. No simulated fallback data.
+If real data is unavailable, the system reports it honestly.
 """
 
 import requests
 import numpy as np
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from datetime import datetime
 import io
 from PIL import Image
@@ -23,14 +26,14 @@ def query_stac_scenes(
 ) -> List[Dict[str, Any]]:
     """
     Queries STAC API for Sentinel-2 L2A scenes around coordinates across the given year range.
+    Returns real results or an empty list — never synthesizes fake catalog entries.
     """
     delta = 0.05
     bbox = [lon - delta, lat - delta, lon + delta, lat + delta]
     start_date = f"{start_year}-01-01T00:00:00Z"
     end_date = f"{end_year}-12-31T23:59:59Z"
 
-    # Try Copernicus Data Space first, fallback to Planetary Computer
-    headers = {"User-Agent": "ORBITAL-GEOINT-Engine/1.0", "Content-Type": "application/json"}
+    headers = {"User-Agent": "ORBITAL-GEOINT-Engine/2.0", "Content-Type": "application/json"}
     payload = {
         "collections": ["SENTINEL-2"],
         "bbox": bbox,
@@ -56,24 +59,10 @@ def query_stac_scenes(
                     "source": "Copernicus Data Space"
                 })
     except Exception as e:
-        # Fallback to catalog synthesis
+        # STAC unavailable — return empty, NOT fake data
         pass
 
-    if not results:
-        # Generate verified temporal catalog entries based on known Sentinel-2 revisit orbit
-        for y in range(start_year, end_year + 1):
-            results.append({
-                "id": f"S2A_MSIL2A_{y}0615T054651_N0500_R105_T43QDA",
-                "platform": "Sentinel-2A / Sentinel-2B",
-                "datetime": f"{y}-06-15T05:46:51Z",
-                "cloud_cover": round(2.1 + (y * 3) % 8, 1),
-                "bbox": bbox,
-                "resolution_meters": 10.0,
-                "bands": ["B02 (Blue)", "B03 (Green)", "B04 (Red)", "B08 (NIR)"],
-                "source": "ESA Sentinel-2 Cloudless L2A"
-            })
-
-    return results
+    return results  # May be empty — that's honest
 
 
 def fetch_tile_spectral_matrix(
@@ -81,9 +70,16 @@ def fetch_tile_spectral_matrix(
     lon: float,
     year: int,
     grid_size: int = 32
-) -> Dict[str, np.ndarray]:
+) -> Dict[str, Any]:
     """
-    Fetches real tile image for the coordinate and year, and extracts RGB and spectral proxy channels.
+    Fetches real tile image for the coordinate and year, extracts RGB channels.
+    
+    NOTE: This provides RGB from rendered satellite mosaics (e.g., EOX Sentinel-2 cloudless).
+    These are true-color composites, but they do NOT contain real multispectral bands.
+    Real multispectral analysis requires Earth Engine integration.
+    
+    IMPORTANT: No fake NIR synthesis. The 'nir' channel is OMITTED when we don't have
+    real NIR data. Any analysis using NIR must check for this.
     """
     # Calculate Web Mercator tile coordinates at zoom 12
     zoom = 12
@@ -92,6 +88,7 @@ def fetch_tile_spectral_matrix(
     xtile = int((lon + 180.0) / 360.0 * n)
     ytile = int((1.0 - np.arcsinh(np.tan(lat_rad)) / np.pi) / 2.0 * n)
 
+    tile_url = None
     if year >= 2017:
         y_clamped = min(max(year, 2017), 2024)
         tile_url = f"https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-{y_clamped}_3857/default/GoogleMapsCompatible/{zoom}/{ytile}/{xtile}.jpg"
@@ -100,7 +97,7 @@ def fetch_tile_spectral_matrix(
         tile_url = f"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{y_clamped}-06-20/GoogleMapsCompatible_Level9/8/{int(ytile/16)}/{int(xtile/16)}.jpg"
 
     try:
-        resp = requests.get(tile_url, timeout=4, headers={"User-Agent": "ORBITAL/1.0"})
+        resp = requests.get(tile_url, timeout=4, headers={"User-Agent": "ORBITAL/2.0"})
         if resp.status_code == 200:
             img = Image.open(io.BytesIO(resp.content)).convert('RGB')
             img_resized = img.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
@@ -108,41 +105,29 @@ def fetch_tile_spectral_matrix(
             red = arr[:, :, 0]
             green = arr[:, :, 1]
             blue = arr[:, :, 2]
-            
-            # Synthesize NIR channel from green & brightness spectral response
-            nir = (green.astype(float) * 1.4 - red.astype(float) * 0.3).clip(0, 255)
-            
+
             return {
                 "red": red,
                 "green": green,
                 "blue": blue,
-                "nir": nir,
-                "status": "success",
-                "tile_url": tile_url
+                # NO fake NIR synthesis — if you need NIR, use Earth Engine
+                "nir": None,
+                "status": "real_rgb",
+                "data_source": "EOX Sentinel-2 Cloudless Mosaic" if year >= 2017 else "NASA GIBS MODIS",
+                "tile_url": tile_url,
+                "warning": "RGB only — no real multispectral bands. NDVI requires Earth Engine integration.",
             }
-    except Exception as e:
+    except Exception:
         pass
 
-    # Deterministic spatial seed generation if tile server is slow
-    seed = int((abs(lat) * 1000 + abs(lon) * 100 + year) % 10000)
-    rng = np.random.RandomState(seed)
-    
-    # Base terrain variation
-    base_green = rng.uniform(40, 180, (grid_size, grid_size))
-    # Urban development grows with year
-    urban_factor = (year - 2005) / 20.0
-    urban_patches = (rng.uniform(0, 1, (grid_size, grid_size)) > (0.8 - urban_factor * 0.35)).astype(float)
-    
-    red = (base_green * 0.6 + urban_patches * 120).clip(0, 255)
-    green = (base_green * (1.0 - urban_patches * 0.5)).clip(0, 255)
-    blue = (base_green * 0.5 + urban_patches * 110).clip(0, 255)
-    nir = (green * 1.5 - red * 0.4).clip(0, 255)
-
+    # Total failure — return honest unavailable status
     return {
-        "red": red,
-        "green": green,
-        "blue": blue,
-        "nir": nir,
-        "status": "simulated",
-        "tile_url": tile_url
+        "red": None,
+        "green": None,
+        "blue": None,
+        "nir": None,
+        "status": "unavailable",
+        "data_source": "none",
+        "tile_url": tile_url,
+        "warning": "Tile server unreachable. No data available.",
     }

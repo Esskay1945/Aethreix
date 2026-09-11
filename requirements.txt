@@ -1,0 +1,28 @@
+# ORBITAL Backend Dependencies
+# Python 3.11+ required
+
+# ── Web Framework ──
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0
+
+# ── HTTP Client ──
+httpx>=0.25.0
+requests>=2.31.0
+
+# ── Environment ──
+python-dotenv>=1.0.0
+
+# ── Earth Engine ──
+earthengine-api>=0.1.380
+google-auth>=2.23.0
+
+# ── Geospatial & Scientific ──
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# ── STAC / Satellite Catalog ──
+# (uses httpx directly, no additional deps)
+
+# ── SSE Support ──
+sse-starlette>=1.6.0

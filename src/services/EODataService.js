@@ -1,14 +1,16 @@
 /**
  * EODataService — Earth Observation data availability service.
  * Queries Copernicus STAC API for Sentinel-2/1 data availability.
- * Falls back to simulated data if API is unavailable.
+ * 
+ * IMPORTANT: NO simulated/random fallback data. If API is unavailable,
+ * returns an honest empty result.
  */
 
 const STAC_API = 'https://stac.dataspace.copernicus.eu/v1';
 
 /**
  * Get available EO data for a bounding box.
- * Returns array of { year, optical, sar, cloudCover } objects.
+ * Returns array of { year, sensors: [{name, count, avgCloudCover}] } objects.
  */
 export async function getDataAvailability(lat, lon, radiusKm = 10) {
   try {
@@ -16,8 +18,9 @@ export async function getDataAvailability(lat, lon, radiusKm = 10) {
     const results = await querySTAC(bbox);
     return processAvailability(results);
   } catch (err) {
-    console.warn('STAC API unavailable, using simulated data:', err.message);
-    return getSimulatedAvailability();
+    console.warn('STAC API unavailable:', err.message);
+    // Return empty — NOT simulated data
+    return getKnownSensorAvailability();
   }
 }
 
@@ -44,7 +47,7 @@ async function querySTAC(bbox) {
       body: JSON.stringify({
         collections: ['sentinel-2-l2a'],
         bbox,
-        datetime: '2017-01-01T00:00:00Z/2026-12-31T23:59:59Z',
+        datetime: '2015-01-01T00:00:00Z/2026-12-31T23:59:59Z',
         limit: 100,
         fields: {
           include: ['properties.datetime', 'properties.eo:cloud_cover'],
@@ -62,9 +65,26 @@ async function querySTAC(bbox) {
 function processAvailability(stacResponse) {
   const yearMap = {};
 
-  // Initialize years
-  for (let y = 2017; y <= 2026; y++) {
-    yearMap[y] = { year: y, optical: false, sar: y >= 2018, opticalCount: 0, avgCloudCover: 0 };
+  // Initialize only years where sensors actually existed
+  // Sentinel-2: launched June 2015 (2A), March 2017 (2B)
+  // Sentinel-1: launched April 2014 (1A), April 2016 (1B)
+  // Landsat-8: launched February 2013
+  for (let y = 2013; y <= 2026; y++) {
+    yearMap[y] = {
+      year: y,
+      sensors: [],
+      hasData: false,
+    };
+
+    if (y >= 2013) {
+      yearMap[y].sensors.push({ name: 'Landsat-8', count: 0, avgCloudCover: null });
+    }
+    if (y >= 2014) {
+      yearMap[y].sensors.push({ name: 'Sentinel-1 SAR', count: 0, avgCloudCover: null });
+    }
+    if (y >= 2015) {
+      yearMap[y].sensors.push({ name: 'Sentinel-2', count: 0, avgCloudCover: null });
+    }
   }
 
   if (stacResponse.features) {
@@ -72,16 +92,15 @@ function processAvailability(stacResponse) {
       const date = new Date(feat.properties?.datetime);
       const year = date.getFullYear();
       if (yearMap[year]) {
-        yearMap[year].optical = true;
-        yearMap[year].opticalCount++;
-        yearMap[year].avgCloudCover += feat.properties?.['eo:cloud_cover'] || 0;
-      }
-    }
-
-    // Average cloud cover
-    for (const y of Object.values(yearMap)) {
-      if (y.opticalCount > 0) {
-        y.avgCloudCover = Math.round(y.avgCloudCover / y.opticalCount);
+        const s2sensor = yearMap[year].sensors.find(s => s.name === 'Sentinel-2');
+        if (s2sensor) {
+          s2sensor.count++;
+          const cc = feat.properties?.['eo:cloud_cover'] || 0;
+          s2sensor.avgCloudCover = s2sensor.avgCloudCover
+            ? (s2sensor.avgCloudCover * (s2sensor.count - 1) + cc) / s2sensor.count
+            : cc;
+          yearMap[year].hasData = true;
+        }
       }
     }
   }
@@ -89,14 +108,24 @@ function processAvailability(stacResponse) {
   return Object.values(yearMap);
 }
 
-function getSimulatedAvailability() {
-  return Array.from({ length: 10 }, (_, i) => ({
-    year: 2017 + i,
-    optical: true,
-    sar: i >= 1, // SAR from 2018+
-    opticalCount: Math.floor(Math.random() * 40) + 15,
-    avgCloudCover: Math.floor(Math.random() * 30) + 5,
-  }));
+/**
+ * Known sensor availability dates — NOT measured data, just sensor launch dates.
+ * This is factual metadata, not simulated observations.
+ */
+function getKnownSensorAvailability() {
+  const result = [];
+  for (let y = 2013; y <= 2026; y++) {
+    const sensors = [];
+    if (y >= 2013) sensors.push({ name: 'Landsat-8', count: null, avgCloudCover: null });
+    if (y >= 2014) sensors.push({ name: 'Sentinel-1 SAR', count: null, avgCloudCover: null });
+    if (y >= 2015) sensors.push({ name: 'Sentinel-2', count: null, avgCloudCover: null });
+    result.push({
+      year: y,
+      sensors,
+      hasData: null, // null = unknown (STAC unavailable), not simulated
+    });
+  }
+  return result;
 }
 
 /**
@@ -112,7 +141,6 @@ export function formatCoords(lat, lon) {
  * Calculate approximate area visible in the viewport.
  */
 export function estimateViewportArea(cameraAlt) {
-  // Very rough estimation based on camera altitude
-  const widthKm = cameraAlt * 0.001 * 2; // rough FOV
+  const widthKm = cameraAlt * 0.001 * 2;
   return (widthKm * widthKm).toFixed(0);
 }

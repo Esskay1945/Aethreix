@@ -56,7 +56,7 @@ const TYPE_LABELS = {
 
 function getRecentSearches() {
   try {
-    return JSON.parse(sessionStorage.getItem('aethrix_recent') || '[]');
+    return JSON.parse(sessionStorage.getItem('aethreix_recent') || '[]');
   } catch { return []; }
 }
 
@@ -64,7 +64,7 @@ function saveRecentSearch(item) {
   try {
     const recent = getRecentSearches().filter(r => r.name !== item.name);
     recent.unshift({ name: item.name, lat: item.lat, lon: item.lon, type: 'recent' });
-    sessionStorage.setItem('aethrix_recent', JSON.stringify(recent.slice(0, 6)));
+    sessionStorage.setItem('aethreix_recent', JSON.stringify(recent.slice(0, 6)));
   } catch { /* ignore */ }
 }
 
@@ -135,7 +135,7 @@ export default function SearchBar() {
         try {
           const res = await fetch(
             `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(value)}&limit=5&addressdetails=1`,
-            { headers: { 'User-Agent': 'Aethrix/1.0' } }
+            { headers: { 'User-Agent': 'Aethreix/1.0' } }
           );
           const data = await res.json();
           if (data.length > 0) {
@@ -192,7 +192,7 @@ export default function SearchBar() {
 
       const response = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trimmed)}&limit=1`,
-        { headers: { 'User-Agent': 'Aethrix/1.0' } }
+        { headers: { 'User-Agent': 'Aethreix/1.0' } }
       );
       const results = await response.json();
 

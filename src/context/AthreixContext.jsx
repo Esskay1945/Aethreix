@@ -2,16 +2,9 @@ import React, { createContext, useContext, useReducer, useCallback } from 'react
 
 const AthreixContext = createContext(null);
 
-const GENERATED_YEARS = Array.from({ length: 2026 - 2005 + 1 }, (_, i) => {
-  const year = 2005 + i;
-  return {
-    year,
-    optical: true,
-    sar: year >= 2014, // Sentinel-1 active from 2014
-    source: year >= 2017 ? 'Sentinel-2 (10m)' : year >= 2013 ? 'Landsat-8 (30m)' : 'Landsat-7 / NASA GIBS (30m)',
-  };
-});
-
+// ═══════════════════════════════════════════════════════════════════════════
+// INITIAL STATE — No hard-coded fake data
+// ═══════════════════════════════════════════════════════════════════════════
 const initialState = {
   // Location
   location: {
@@ -20,28 +13,66 @@ const initialState = {
     name: 'India',
     elevation: 0,
     cameraAlt: 15000000,
+    address: null, // Full reverse geocode result
   },
 
-  // Timeline & Imagery (2005 - 2026 full historical archive)
+  // AOI (Area of Interest)
+  aoi: {
+    type: null, // 'point' | 'radius' | 'rectangle' | 'polygon' | 'admin'
+    geometry: null, // GeoJSON geometry
+    area: null, // square meters
+    perimeter: null, // meters
+    center: null, // { lat, lon }
+  },
+  drawingMode: null, // null | 'point' | 'radius' | 'rectangle' | 'polygon' | 'measure_distance' | 'measure_area'
+
+  // Timeline — data-driven, NOT hard-coded
   selectedYear: 2024,
-  availableYears: GENERATED_YEARS,
+  selectedDateRange: null, // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+  availableData: [], // Populated from backend: [{ year, sensors: [{name, count, cloudCover}] }]
   imageryLoading: false,
 
   // Map Display & Layers
-  labelsEnabled: true,
-  roadsEnabled: true,
-  mapMode: 'hybrid', // 'satellite' | 'hybrid' | 'sar' | 'ndvi'
+  mapEngine: 'google', // 'google' | 'cesium'
+  mapType: 'hybrid', // 'roadmap' | 'satellite' | 'hybrid' | 'terrain'
+  activeLayers: {
+    roads: true,
+    labels: true,
+    boundaries: false,
+    transit: false,
+    traffic: false,
+    buildings: false,
+    places: false,
+  },
+  analysisLayers: {
+    ndvi: false,
+    ndwi: false,
+    ndbi: false,
+    change: false,
+    water: false,
+    vegetation: false,
+    builtup: false,
+    sar: false,
+    anomaly: false,
+    evidence: true,
+  },
+  layerOpacities: {}, // layerId -> 0-1
 
-  // ORBITAL GeoJSON Change Masks & Visual Evidence
+  // Analysis Results
+  analysisResults: null, // { geojson, metrics, evidence, transitions }
   activeChangeMaskGeoJSON: null,
   showChangeMask: true,
-  activeAuditTrail: null,
+  changePolygons: [], // Individual change features with metadata
 
-  // Street View 360° Ground-Level Panorama
+  // Mission System
+  activeMission: null, // { id, query, status, progress, steps[], results }
+  missionHistory: [],
+
+  // Street View
   streetViewOpen: false,
-  streetViewTarget: null, // { lat, lon, heading, name }
+  streetViewTarget: null,
 
-  // Chat & AI Engine
+  // Chat & AI
   chatOpen: false,
   messages: [],
   isAnalyzing: false,
@@ -49,63 +80,169 @@ const initialState = {
   // UI
   searchQuery: '',
   flyToTrigger: null,
-  cameraAction: null, // { type: 'zoomIn' | 'zoomOut' | 'tilt' | 'resetNorth' }
+  cameraAction: null,
+  leftPanelTab: 'layers', // 'layers' | 'aoi' | 'imagery' | 'analysis'
+  rightPanelTab: 'chat', // 'chat' | 'evidence' | 'mission' | 'report'
+  leftPanelOpen: false,
+  rightPanelOpen: false,
+  measurements: [], // [{ type, points, value, unit }]
+
+  // Temporal Comparison (Spec §19)
+  temporalCompare: {
+    active: false,
+    beforeYear: null,
+    afterYear: null,
+    beforeTileUrl: null,
+    afterTileUrl: null,
+  },
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// REDUCER
+// ═══════════════════════════════════════════════════════════════════════════
 function reducer(state, action) {
   switch (action.type) {
+    // ── Location ──
     case 'SET_LOCATION':
       return { ...state, location: { ...state.location, ...action.payload } };
 
+    case 'SET_REVERSE_GEOCODE':
+      return { ...state, location: { ...state.location, address: action.payload } };
+
+    // ── AOI ──
+    case 'SET_AOI':
+      return { ...state, aoi: { ...state.aoi, ...action.payload } };
+
+    case 'CLEAR_AOI':
+      return {
+        ...state,
+        aoi: { type: null, geometry: null, area: null, perimeter: null, center: null },
+        drawingMode: null,
+      };
+
+    case 'SET_DRAWING_MODE':
+      return { ...state, drawingMode: action.payload };
+
+    // ── Timeline ──
     case 'SET_SELECTED_YEAR':
       return { ...state, selectedYear: action.payload, imageryLoading: true };
+
+    case 'SET_TEMPORAL_COMPARE':
+      return { ...state, temporalCompare: { ...state.temporalCompare, ...action.payload } };
+
+    case 'SET_DATE_RANGE':
+      return { ...state, selectedDateRange: action.payload };
+
+    case 'SET_AVAILABLE_DATA':
+      return { ...state, availableData: action.payload };
 
     case 'SET_IMAGERY_LOADING':
       return { ...state, imageryLoading: action.payload };
 
-    case 'TOGGLE_LABELS':
-      return { ...state, labelsEnabled: !state.labelsEnabled };
+    // ── Map Engine ──
+    case 'SET_MAP_ENGINE':
+      return { ...state, mapEngine: action.payload };
 
-    case 'TOGGLE_ROADS':
-      return { ...state, roadsEnabled: !state.roadsEnabled };
+    case 'SET_MAP_TYPE':
+      return { ...state, mapType: action.payload };
 
-    case 'SET_MAP_MODE': {
-      const mode = action.payload;
-      let newLabels = state.labelsEnabled;
-      let newRoads = state.roadsEnabled;
-      if (mode === 'satellite') {
-        newLabels = false;
-        newRoads = false;
-      } else if (mode === 'hybrid') {
-        newLabels = true;
-        newRoads = true;
+    // ── Layers ──
+    case 'TOGGLE_LAYER': {
+      const { category, layer } = action.payload;
+      if (category === 'analysis') {
+        return {
+          ...state,
+          analysisLayers: {
+            ...state.analysisLayers,
+            [layer]: !state.analysisLayers[layer],
+          },
+        };
       }
-      return { ...state, mapMode: mode, labelsEnabled: newLabels, roadsEnabled: newRoads };
+      return {
+        ...state,
+        activeLayers: {
+          ...state.activeLayers,
+          [layer]: !state.activeLayers[layer],
+        },
+      };
     }
+
+    case 'SET_LAYER_OPACITY':
+      return {
+        ...state,
+        layerOpacities: {
+          ...state.layerOpacities,
+          [action.payload.layer]: action.payload.opacity,
+        },
+      };
+
+    // ── Analysis Results ──
+    case 'SET_ANALYSIS_RESULTS':
+      return { ...state, analysisResults: action.payload };
 
     case 'SET_CHANGE_MASK':
       return {
         ...state,
         activeChangeMaskGeoJSON: action.payload,
-        showChangeMask: true
+        showChangeMask: true,
       };
 
     case 'TOGGLE_CHANGE_MASK':
       return { ...state, showChangeMask: !state.showChangeMask };
 
     case 'CLEAR_CHANGE_MASK':
-      return { ...state, activeChangeMaskGeoJSON: null };
+      return { ...state, activeChangeMaskGeoJSON: null, changePolygons: [] };
 
-    case 'SET_AUDIT_TRAIL':
-      return { ...state, activeAuditTrail: action.payload };
+    case 'SET_CHANGE_POLYGONS':
+      return { ...state, changePolygons: action.payload };
 
+    // ── Mission ──
+    case 'SET_ACTIVE_MISSION':
+      return { ...state, activeMission: action.payload };
+
+    case 'UPDATE_MISSION_PROGRESS':
+      if (!state.activeMission) return state;
+      return {
+        ...state,
+        activeMission: {
+          ...state.activeMission,
+          ...action.payload,
+        },
+      };
+
+    case 'ADD_MISSION_STEP':
+      if (!state.activeMission) return state;
+      return {
+        ...state,
+        activeMission: {
+          ...state.activeMission,
+          steps: [...(state.activeMission.steps || []), action.payload],
+        },
+      };
+
+    case 'COMPLETE_MISSION':
+      return {
+        ...state,
+        activeMission: {
+          ...state.activeMission,
+          status: 'complete',
+          progress: 100,
+          results: action.payload,
+        },
+        missionHistory: [state.activeMission, ...state.missionHistory].slice(0, 50),
+      };
+
+    case 'CLEAR_MISSION':
+      return { ...state, activeMission: null };
+
+    // ── Street View ──
     case 'TOGGLE_STREET_VIEW': {
       const willOpen = !state.streetViewOpen;
       return {
         ...state,
         streetViewOpen: willOpen,
         streetViewTarget: willOpen
-          ? (action.payload || { lat: state.location.lat, lon: state.location.lon, name: state.location.name })
+          ? action.payload || { lat: state.location.lat, lon: state.location.lon, name: state.location.name }
           : null,
       };
     }
@@ -120,14 +257,29 @@ function reducer(state, action) {
     case 'CLOSE_STREET_VIEW':
       return { ...state, streetViewOpen: false, streetViewTarget: null };
 
+    // ── Camera ──
     case 'SET_CAMERA_ACTION':
       return { ...state, cameraAction: action.payload };
 
+    case 'FLY_TO':
+      return {
+        ...state,
+        flyToTrigger: action.payload,
+        location: { ...state.location, ...action.payload },
+      };
+
+    case 'UPDATE_CAMERA':
+      return {
+        ...state,
+        location: { ...state.location, cameraAlt: action.payload.altitude },
+      };
+
+    // ── Chat ──
     case 'TOGGLE_CHAT':
-      return { ...state, chatOpen: !state.chatOpen };
+      return { ...state, chatOpen: !state.chatOpen, rightPanelOpen: !state.chatOpen, rightPanelTab: 'chat' };
 
     case 'OPEN_CHAT':
-      return { ...state, chatOpen: true };
+      return { ...state, chatOpen: true, rightPanelOpen: true, rightPanelTab: 'chat' };
 
     case 'CLOSE_CHAT':
       return { ...state, chatOpen: false };
@@ -146,30 +298,38 @@ function reducer(state, action) {
     case 'SET_ANALYZING':
       return { ...state, isAnalyzing: action.payload };
 
+    // ── UI Panels ──
+    case 'SET_LEFT_PANEL_TAB':
+      return { ...state, leftPanelTab: action.payload, leftPanelOpen: true };
+
+    case 'SET_RIGHT_PANEL_TAB':
+      return { ...state, rightPanelTab: action.payload, rightPanelOpen: true };
+
+    case 'TOGGLE_LEFT_PANEL':
+      return { ...state, leftPanelOpen: !state.leftPanelOpen };
+
+    case 'TOGGLE_RIGHT_PANEL':
+      return { ...state, rightPanelOpen: !state.rightPanelOpen };
+
+    // ── Search ──
     case 'SET_SEARCH_QUERY':
       return { ...state, searchQuery: action.payload };
 
-    case 'FLY_TO':
-      return {
-        ...state,
-        flyToTrigger: action.payload,
-        location: { ...state.location, ...action.payload },
-      };
+    // ── Measurements ──
+    case 'ADD_MEASUREMENT':
+      return { ...state, measurements: [...state.measurements, action.payload] };
 
-    case 'UPDATE_CAMERA':
-      return {
-        ...state,
-        location: { ...state.location, cameraAlt: action.payload.altitude },
-      };
-
-    case 'SET_AVAILABLE_DATA':
-      return { ...state, availableYears: action.payload };
+    case 'CLEAR_MEASUREMENTS':
+      return { ...state, measurements: [], drawingMode: null };
 
     default:
       return state;
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PROVIDER
+// ═══════════════════════════════════════════════════════════════════════════
 export function AthreixProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
@@ -220,6 +380,43 @@ export function AthreixProvider({ children }) {
     dispatch({ type: 'SET_CHANGE_MASK', payload: geojson });
   }, []);
 
+  // Mission helpers
+  const startMission = useCallback((query, aoi) => {
+    const mission = {
+      id: `mission_${Date.now()}`,
+      query,
+      aoi,
+      status: 'running',
+      progress: 0,
+      steps: [],
+      results: null,
+      startedAt: new Date(),
+    };
+    dispatch({ type: 'SET_ACTIVE_MISSION', payload: mission });
+    return mission.id;
+  }, []);
+
+  const updateMissionStep = useCallback((stepData) => {
+    dispatch({ type: 'ADD_MISSION_STEP', payload: stepData });
+  }, []);
+
+  const completeMission = useCallback((results) => {
+    dispatch({ type: 'COMPLETE_MISSION', payload: results });
+  }, []);
+
+  // AOI helpers
+  const setAOI = useCallback((aoiData) => {
+    dispatch({ type: 'SET_AOI', payload: aoiData });
+  }, []);
+
+  const clearAOI = useCallback(() => {
+    dispatch({ type: 'CLEAR_AOI' });
+  }, []);
+
+  const setDrawingMode = useCallback((mode) => {
+    dispatch({ type: 'SET_DRAWING_MODE', payload: mode });
+  }, []);
+
   const value = {
     state,
     dispatch,
@@ -230,6 +427,12 @@ export function AthreixProvider({ children }) {
     toggleStreetView,
     toggleChangeMask,
     setChangeMask,
+    startMission,
+    updateMissionStep,
+    completeMission,
+    setAOI,
+    clearAOI,
+    setDrawingMode,
   };
 
   return (

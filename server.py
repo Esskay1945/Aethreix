@@ -3,8 +3,11 @@ import argparse
 import sys
 import os
 
+from dotenv import load_dotenv
+
 # Ensure current directory is at head of Python path for Uvicorn module imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+load_dotenv()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ORBITAL Engine Launcher")
@@ -12,5 +15,5 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address to bind to")
     args = parser.parse_args()
     
-    print(f"🚀 Starting ORBITAL Python Engine on http://{args.host}:{args.port}")
+    print(f"[ORBITAL] Starting Python Engine on http://{args.host}:{args.port}")
     uvicorn.run("server.main:app", host=args.host, port=args.port, reload=False)

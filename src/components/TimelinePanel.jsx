@@ -2,14 +2,21 @@ import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useAthreix } from '../context/AthreixContext.jsx';
 import { getDataAvailability } from '../services/EODataService.js';
 
+/**
+ * TimelinePanel — Data-driven temporal navigation.
+ * 
+ * Shows actual sensor availability per year. Never claims data exists
+ * when it doesn't. Sentinel-2 starts 2015, Sentinel-1 starts 2014,
+ * Landsat-8 starts 2013.
+ */
 export default function TimelinePanel() {
   const { state, dispatch } = useAthreix();
-  const { availableYears, selectedYear, location } = state;
+  const { availableData, selectedYear, location } = state;
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [pickerYear, setPickerYear] = useState(selectedYear);
   const pickerRef = useRef(null);
 
-  // Fetch real data availability when location changes significantly
+  // Fetch real data availability when location changes
   useEffect(() => {
     const fetchAvailability = async () => {
       if (location.cameraAlt < 500000) {
@@ -41,7 +48,7 @@ export default function TimelinePanel() {
   );
 
   const handlePickerSubmit = useCallback(() => {
-    const y = Math.max(2005, Math.min(2026, pickerYear));
+    const y = Math.max(2013, Math.min(2026, pickerYear));
     dispatch({ type: 'SET_SELECTED_YEAR', payload: y });
     setShowDatePicker(false);
   }, [pickerYear, dispatch]);
@@ -51,21 +58,23 @@ export default function TimelinePanel() {
     if (e.key === 'Escape') setShowDatePicker(false);
   };
 
-  const ALL_YEARS = Array.from({ length: 2026 - 2005 + 1 }, (_, i) => 2005 + i);
+  // Build year range from available data or known sensor dates
+  const years = availableData.length > 0
+    ? availableData
+    : getDefaultYears();
 
   return (
     <div className="timeline-panel glass-panel">
       <div className="timeline-content">
         <div className="timeline-header">
-          <span className="timeline-title">Temporal Archive (2005–2026)</span>
+          <span className="timeline-title">Temporal Navigator</span>
           <div className="timeline-header-right">
             <span className="timeline-selected-date">{selectedYear}</span>
-            {/* Calendar Icon Button */}
             <div className="calendar-picker-container" ref={pickerRef}>
               <button
                 className="calendar-btn"
                 onClick={() => { setPickerYear(selectedYear); setShowDatePicker(!showDatePicker); }}
-                title="Jump to specific year (2005 - 2026)"
+                title="Jump to specific year"
                 aria-label="Open year picker"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -73,21 +82,16 @@ export default function TimelinePanel() {
                   <path d="M16 2v4" />
                   <path d="M8 2v4" />
                   <path d="M3 10h18" />
-                  <path d="M8 14h.01" />
-                  <path d="M12 14h.01" />
-                  <path d="M16 14h.01" />
-                  <path d="M8 18h.01" />
-                  <path d="M12 18h.01" />
                 </svg>
               </button>
 
               {showDatePicker && (
                 <div className="year-picker-dropdown glass-panel extended-grid">
-                  <div className="picker-title">Jump to Year (2005–2026)</div>
+                  <div className="picker-title">Jump to Year</div>
                   <div className="picker-input-row">
                     <button
                       className="picker-arrow-btn"
-                      onClick={() => setPickerYear(y => Math.max(2005, y - 1))}
+                      onClick={() => setPickerYear(y => Math.max(2013, y - 1))}
                     >
                       ‹
                     </button>
@@ -97,7 +101,7 @@ export default function TimelinePanel() {
                       value={pickerYear}
                       onChange={(e) => setPickerYear(parseInt(e.target.value) || 2024)}
                       onKeyDown={handlePickerKeyDown}
-                      min="2005"
+                      min="2013"
                       max="2026"
                       autoFocus
                     />
@@ -109,13 +113,17 @@ export default function TimelinePanel() {
                     </button>
                   </div>
                   <div className="picker-year-grid compact">
-                    {ALL_YEARS.map((y) => (
+                    {years.map((item) => (
                       <button
-                        key={y}
-                        className={`picker-year-cell ${y === pickerYear ? 'selected' : ''} ${y === selectedYear ? 'current' : ''}`}
-                        onClick={() => { setPickerYear(y); dispatch({ type: 'SET_SELECTED_YEAR', payload: y }); setShowDatePicker(false); }}
+                        key={item.year}
+                        className={`picker-year-cell ${item.year === pickerYear ? 'selected' : ''} ${item.year === selectedYear ? 'current' : ''}`}
+                        onClick={() => {
+                          setPickerYear(item.year);
+                          dispatch({ type: 'SET_SELECTED_YEAR', payload: item.year });
+                          setShowDatePicker(false);
+                        }}
                       >
-                        {y}
+                        {item.year}
                       </button>
                     ))}
                   </div>
@@ -134,34 +142,43 @@ export default function TimelinePanel() {
         <div className="timeline-track">
           <div className="timeline-line"></div>
           <div className="timeline-marks">
-            {availableYears.map((item) => (
-              <div
-                key={item.year}
-                className={`timeline-mark ${
-                  item.year === selectedYear ? 'active' : ''
-                } ${item.optical ? 'available' : ''} ${
-                  item.sar ? 'sar-available' : ''
-                }`}
-                onClick={() => handleYearClick(item.year)}
-                title={`${item.year}${item.optical ? ' | Optical ✓' : ''}${
-                  item.sar ? ' | SAR ✓' : ''
-                }`}
-              >
-                <div className="timeline-dot"></div>
-                <span className="timeline-year-label">{item.year}</span>
-              </div>
-            ))}
+            {years.map((item) => {
+              const hasSentinel2 = item.sensors?.some(s => s.name === 'Sentinel-2');
+              const hasSentinel1 = item.sensors?.some(s => s.name === 'Sentinel-1 SAR');
+              const hasLandsat = item.sensors?.some(s => s.name === 'Landsat-8');
+              const hasRealData = item.hasData === true;
+
+              return (
+                <div
+                  key={item.year}
+                  className={`timeline-mark ${
+                    item.year === selectedYear ? 'active' : ''
+                  } ${hasRealData ? 'has-data' : ''} ${
+                    hasSentinel2 ? 'available' : ''
+                  } ${hasSentinel1 ? 'sar-available' : ''}`}
+                  onClick={() => handleYearClick(item.year)}
+                  title={buildTooltip(item)}
+                >
+                  <div className="timeline-dot"></div>
+                  <span className="timeline-year-label">{item.year}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
         <div className="timeline-legend">
           <div className="legend-item">
             <span className="legend-dot optical"></span>
-            <span>Sentinel-2 Optical</span>
+            <span>Sentinel-2 (2015+)</span>
           </div>
           <div className="legend-item">
             <span className="legend-dot sar"></span>
-            <span>Sentinel-1 SAR</span>
+            <span>Sentinel-1 SAR (2014+)</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-dot landsat"></span>
+            <span>Landsat-8 (2013+)</span>
           </div>
           <div className="legend-item">
             <span className="legend-dot active"></span>
@@ -171,4 +188,31 @@ export default function TimelinePanel() {
       </div>
     </div>
   );
+}
+
+function getDefaultYears() {
+  const result = [];
+  for (let y = 2013; y <= 2026; y++) {
+    const sensors = [];
+    if (y >= 2013) sensors.push({ name: 'Landsat-8', count: null, avgCloudCover: null });
+    if (y >= 2014) sensors.push({ name: 'Sentinel-1 SAR', count: null, avgCloudCover: null });
+    if (y >= 2015) sensors.push({ name: 'Sentinel-2', count: null, avgCloudCover: null });
+    result.push({ year: y, sensors, hasData: null });
+  }
+  return result;
+}
+
+function buildTooltip(item) {
+  const parts = [`${item.year}`];
+  if (item.sensors) {
+    for (const s of item.sensors) {
+      const countStr = s.count !== null ? ` (${s.count} scenes)` : '';
+      const ccStr = s.avgCloudCover !== null ? ` | Cloud: ${Math.round(s.avgCloudCover)}%` : '';
+      parts.push(`${s.name}${countStr}${ccStr}`);
+    }
+  }
+  if (item.hasData === null) {
+    parts.push('Data availability: checking...');
+  }
+  return parts.join('\n');
 }

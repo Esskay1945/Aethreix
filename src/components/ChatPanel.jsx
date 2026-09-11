@@ -14,11 +14,33 @@ const SUGGESTIONS = [
 ];
 
 export default function ChatPanel() {
-  const { state, dispatch, sendMessage, addAIMessage } = useAthreix();
+  const { state, dispatch, sendMessage, addAIMessage, startMission, updateMissionStep, completeMission } = useAthreix();
   const { chatOpen, messages, isAnalyzing, location, selectedYear } = state;
   const [inputText, setInputText] = useState('');
+  const [imageFile, setImageFile] = useState(null);
+  const [imageBase64, setImageBase64] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Handle image upload and base64 conversion
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setImageFile(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImageBase64(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const clearImage = () => {
+    setImageFile(null);
+    setImageBase64(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   // Auto-scroll to bottom of messages
   const scrollToBottom = useCallback(() => {
@@ -31,7 +53,22 @@ export default function ChatPanel() {
     }
   }, [messages, isAnalyzing, chatOpen, scrollToBottom]);
 
-  // Handle query submission with Mistral AI Streaming + Fallback
+  // Detect if a query is an analysis/investigation query (routes through mission system)
+  // vs. a conversational query (routes through Groq LLM streaming)
+  const isAnalysisQuery = useCallback((text) => {
+    const q = text.toLowerCase();
+    const analysisKeywords = [
+      'change', 'construction', 'built', 'develop', 'growth', 'expand', 'urban',
+      'ndvi', 'ndwi', 'ndbi', 'vegetation', 'forest', 'water', 'flood',
+      'sar', 'radar', 'structure', 'infrastructure', 'analyze', 'analysis',
+      'compare', 'difference', 'history', 'since', 'between', 'satellite',
+      'land cover', 'land use', 'spectral', 'multispectral', 'sentinel',
+      'detect', 'monitor', 'assessment', 'evaluate', 'crop', 'drought',
+    ];
+    return analysisKeywords.some(kw => q.includes(kw));
+  }, []);
+
+  // Handle query submission — routes through mission or LLM depending on intent
   const handleSend = useCallback(
     async (textToSend) => {
       const text = (textToSend || inputText).trim();
@@ -54,8 +91,136 @@ export default function ChatPanel() {
         },
       });
 
-      const context = { location, selectedYear };
+      const context = { location, selectedYear, image_base64: imageBase64 };
+      const currentImage = imageBase64;
+      if (currentImage) clearImage();
 
+      // ═══════════════════════════════════════════════════════════════
+      // ROUTE 1: Image upload → direct ORBITAL backend (geolocation)
+      // ═══════════════════════════════════════════════════════════════
+      if (currentImage) {
+        try {
+          const fallbackRes = await runAnalysis(text, context);
+          dispatch({
+            type: 'UPDATE_LAST_MESSAGE',
+            payload: { text: fallbackRes.text, evidence: fallbackRes.evidence, isStreaming: false },
+          });
+          if (fallbackRes.evidence?.location_match) {
+            const { lat, lon, name } = fallbackRes.evidence.location_match;
+            dispatch({ type: 'FLY_TO', payload: { lat, lon, name } });
+            dispatch({ type: 'SET_LOCATION', payload: { lat, lon, name, cameraAlt: 3500 } });
+          }
+          if (fallbackRes.evidence?.geojson_mask) {
+            dispatch({ type: 'SET_CHANGE_MASK', payload: fallbackRes.evidence.geojson_mask });
+          }
+        } catch (err) {
+          dispatch({
+            type: 'UPDATE_LAST_MESSAGE',
+            payload: { text: `Analysis error: ${err.message}`, isStreaming: false },
+          });
+        } finally {
+          dispatch({ type: 'SET_ANALYZING', payload: false });
+        }
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // ROUTE 2: Analysis query → Mission system with SSE streaming
+      // ═══════════════════════════════════════════════════════════════
+      if (isAnalysisQuery(text)) {
+        try {
+          const { executeMission } = await import('../services/MissionService.js');
+
+          // Start a mission — updates the mission tracker UI
+          const missionId = startMission(text, state.aoi);
+          dispatch({
+            type: 'UPDATE_LAST_MESSAGE',
+            payload: { text: '🛰️ **Mission initiated** — running satellite analysis pipeline...\n\n', isStreaming: true },
+          });
+
+          const missionResult = await executeMission(text, location, state.aoi?.geometry, {
+            onStepStart: (data) => {
+              updateMissionStep({ name: data.name, status: 'running', data_quality: data.data_quality });
+              dispatch({ type: 'UPDATE_MISSION_PROGRESS', payload: { progress: data.progress } });
+            },
+            onStepDone: (data) => {
+              updateMissionStep({ name: data.name, status: 'done', data_quality: data.data_quality, data_status: data.data_status });
+              dispatch({ type: 'UPDATE_MISSION_PROGRESS', payload: { progress: data.progress } });
+            },
+            onProgress: (pct) => {
+              dispatch({ type: 'UPDATE_MISSION_PROGRESS', payload: { progress: pct } });
+            },
+            onComplete: (data) => {
+              const result = data.result;
+              completeMission(result);
+
+              // Update chat with the full analysis report
+              dispatch({
+                type: 'UPDATE_LAST_MESSAGE',
+                payload: {
+                  text: result.text || 'Analysis complete.',
+                  isStreaming: false,
+                  evidence: {
+                    type: 'orbital_mission',
+                    model: 'ORBITAL Multi-Sensor Pipeline',
+                    confidence: result.confidence || 0,
+                    sources: result.agent_metadata?.specialists_invoked || [],
+                    data_quality: result.agent_metadata?.data_quality || 'unknown',
+                    fusionUsed: true,
+                    geojson_mask: result.geojson_mask,
+                  },
+                },
+              });
+
+              // Render change mask on the map
+              if (result.geojson_mask) {
+                dispatch({ type: 'SET_CHANGE_MASK', payload: result.geojson_mask });
+              }
+
+              dispatch({ type: 'SET_ANALYZING', payload: false });
+            },
+            onError: (err) => {
+              // Fallback to direct ORBITAL query
+              runAnalysis(text, context).then(fallbackRes => {
+                dispatch({
+                  type: 'UPDATE_LAST_MESSAGE',
+                  payload: { text: fallbackRes.text, evidence: fallbackRes.evidence, isStreaming: false },
+                });
+                if (fallbackRes.evidence?.geojson_mask) {
+                  dispatch({ type: 'SET_CHANGE_MASK', payload: fallbackRes.evidence.geojson_mask });
+                }
+              }).catch(() => {
+                dispatch({
+                  type: 'UPDATE_LAST_MESSAGE',
+                  payload: { text: 'Mission failed. Unable to reach satellite intelligence server.', isStreaming: false },
+                });
+              }).finally(() => {
+                dispatch({ type: 'SET_ANALYZING', payload: false });
+              });
+            },
+          });
+        } catch (err) {
+          // Final fallback
+          try {
+            const fallbackRes = await runAnalysis(text, context);
+            dispatch({
+              type: 'UPDATE_LAST_MESSAGE',
+              payload: { text: fallbackRes.text, evidence: fallbackRes.evidence, isStreaming: false },
+            });
+          } catch {
+            dispatch({
+              type: 'UPDATE_LAST_MESSAGE',
+              payload: { text: 'Analysis unavailable. Check server connection.', isStreaming: false },
+            });
+          }
+          dispatch({ type: 'SET_ANALYZING', payload: false });
+        }
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // ROUTE 3: Conversational query → Groq LLM streaming
+      // ═══════════════════════════════════════════════════════════════
       const onToken = (chunk, fullText) => {
         dispatch({
           type: 'UPDATE_LAST_MESSAGE',
@@ -70,12 +235,12 @@ export default function ChatPanel() {
             text: fullText,
             isStreaming: false,
             evidence: {
-              type: 'mistral_geoint',
-              model: 'Mistral-Small-Latest',
+              type: 'groq_geoint',
+              model: 'Llama-3.3-70B',
               confidence: 96,
               sources: [
-                'Mistral GEOINT Core',
-                selectedYear >= 2017 ? 'Sentinel-2 L2A (10m)' : 'Landsat / NASA GIBS Archive',
+                'Groq GEOINT Core',
+                selectedYear >= 2015 ? 'Sentinel-2 L2A (10m)' : 'Landsat / NASA GIBS Archive',
                 'Esri High-Res Aerial',
               ],
               fusionUsed: true,
@@ -86,35 +251,33 @@ export default function ChatPanel() {
       };
 
       const onError = async (err) => {
-        console.warn('Mistral stream fallback triggered:', err.message);
-        // Seamless fallback to grounded local analysis engine
+        console.warn('Groq stream fallback triggered:', err?.message);
         try {
           const fallbackRes = await runAnalysis(text, context);
           dispatch({
             type: 'UPDATE_LAST_MESSAGE',
-            payload: {
-              text: fallbackRes.text,
-              evidence: fallbackRes.evidence,
-              isStreaming: false,
-            },
+            payload: { text: fallbackRes.text, evidence: fallbackRes.evidence, isStreaming: false },
           });
-        } catch (fallbackErr) {
+          if (fallbackRes.evidence?.location_match) {
+            const { lat, lon, name } = fallbackRes.evidence.location_match;
+            dispatch({ type: 'FLY_TO', payload: { lat, lon, name } });
+          }
+          if (fallbackRes.evidence?.geojson_mask) {
+            dispatch({ type: 'SET_CHANGE_MASK', payload: fallbackRes.evidence.geojson_mask });
+          }
+        } catch {
           dispatch({
             type: 'UPDATE_LAST_MESSAGE',
-            payload: {
-              text: `⚠️ **Analysis Notice:** Unable to reach satellite intelligence server. Coordinates locked: ${location.lat.toFixed(4)}°N, ${location.lon.toFixed(4)}°E (${location.name || 'Target Area'}).`,
-              isStreaming: false,
-            },
+            payload: { text: `Unable to reach intelligence server. Target: ${location.lat.toFixed(4)}°N, ${location.lon.toFixed(4)}°E`, isStreaming: false },
           });
         } finally {
           dispatch({ type: 'SET_ANALYZING', payload: false });
         }
       };
 
-      // Execute Mistral API streaming
       streamMistralResponse(text, context, onToken, onDone, onError);
     },
-    [inputText, isAnalyzing, sendMessage, dispatch, location, selectedYear]
+    [inputText, imageBase64, isAnalyzing, sendMessage, dispatch, location, selectedYear, startMission, updateMissionStep, completeMission, isAnalysisQuery, state.aoi]
   );
 
   const handleKeyDown = (e) => {
@@ -134,7 +297,7 @@ export default function ChatPanel() {
       <button
         className={`chat-toggle-btn ${chatOpen ? 'hidden' : ''}`}
         onClick={() => dispatch({ type: 'OPEN_CHAT' })}
-        title="Open Aethrix Intelligence Chat"
+        title="Open Aethreix ORBITAL Chat"
         id="chat-toggle-btn"
       >
         💬
@@ -148,8 +311,8 @@ export default function ChatPanel() {
             <div className="chat-avatar">A</div>
             <div>
               <div className="chat-header-title">
-                Aethrix AI Agent
-                <span className="mistral-powered-badge">Mistral AI</span>
+                Aethreix ORBITAL
+                <span className="mistral-powered-badge">Groq AI</span>
               </div>
               <div className="chat-header-subtitle">
                 Multimodal EO Intelligence • {selectedYear} • {location.name || 'Global'}
@@ -214,11 +377,31 @@ export default function ChatPanel() {
 
         {/* Input Bar */}
         <div className="chat-input-area">
+          {imageBase64 && (
+            <div className="image-preview-container">
+              <img src={imageBase64} alt="Upload Preview" className="image-thumbnail" />
+              <button className="remove-image-btn" onClick={clearImage} title="Remove image">✕</button>
+            </div>
+          )}
           <div className="chat-input-wrapper">
+            <button 
+              className="chat-attach-btn" 
+              onClick={() => fileInputRef.current?.click()}
+              title="Upload Image for Geolocation"
+            >
+              📎
+            </button>
+            <input 
+              type="file" 
+              accept="image/*" 
+              ref={fileInputRef} 
+              onChange={handleImageUpload} 
+              style={{ display: 'none' }} 
+            />
             <textarea
               ref={textareaRef}
               className="chat-input"
-              placeholder="Ask anything about scene changes, infrastructure, terrain..."
+              placeholder="Ask anything or attach an image to geolocate..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -228,7 +411,7 @@ export default function ChatPanel() {
             <button
               className="chat-send-btn"
               onClick={() => handleSend()}
-              disabled={!inputText.trim() || isAnalyzing}
+              disabled={(!inputText.trim() && !imageBase64) || isAnalyzing}
               id="chat-send-btn"
               title="Send Query"
             >

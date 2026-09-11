@@ -4,6 +4,7 @@ import { useAthreix } from '../context/AthreixContext.jsx';
 export default function EvidenceCard({ evidence }) {
   const { setChangeMask, toggleChangeMask, state } = useAthreix();
   const [showAuditModal, setShowAuditModal] = useState(false);
+  const [showWhyEngine, setShowWhyEngine] = useState(false);
 
   if (!evidence) return null;
 
@@ -65,36 +66,103 @@ export default function EvidenceCard({ evidence }) {
       {/* Quantitative Change Metrics Pill Grid */}
       {metrics && (
         <div className="evidence-metrics-grid">
-          <div className="metric-pill">
-            <span className="metric-num">+{metrics.built_up_expansion_ha || metrics.builtup_increase_ha || 14.8} ha</span>
-            <span className="metric-label">Built-Up Expansion</span>
-          </div>
-          <div className="metric-pill">
-            <span className="metric-num">-{metrics.vegetation_loss_ha || 11.2} ha</span>
-            <span className="metric-label">Vegetation Loss</span>
-          </div>
-          <div className="metric-pill">
-            <span className="metric-num">{metrics.total_changed_area_sq_km || 0.42} km²</span>
-            <span className="metric-label">Total Delta Area</span>
-          </div>
+          {metrics.built_up_expansion_ha > 0 && (
+            <div className="metric-pill">
+              <span className="metric-num">+{metrics.built_up_expansion_ha} ha</span>
+              <span className="metric-label">Built-Up Expansion</span>
+            </div>
+          )}
+          {metrics.vegetation_loss_ha > 0 && (
+            <div className="metric-pill">
+              <span className="metric-num">-{metrics.vegetation_loss_ha} ha</span>
+              <span className="metric-label">Vegetation Loss</span>
+            </div>
+          )}
+          {metrics.total_changed_area_sq_km != null && (
+            <div className="metric-pill">
+              <span className="metric-num">{metrics.total_changed_area_sq_km} km²</span>
+              <span className="metric-label">Total Delta Area</span>
+            </div>
+          )}
+          {metrics.ndvi_delta != null && (
+            <div className="metric-pill">
+              <span className="metric-num" style={{ color: metrics.ndvi_delta < 0 ? 'var(--accent-red)' : 'var(--accent-green)' }}>
+                {metrics.ndvi_delta > 0 ? '+' : ''}{metrics.ndvi_delta?.toFixed(4)}
+              </span>
+              <span className="metric-label">NDVI Delta</span>
+            </div>
+          )}
+          {metrics.ndbi_delta != null && (
+            <div className="metric-pill">
+              <span className="metric-num" style={{ color: metrics.ndbi_delta > 0 ? 'var(--accent-amber)' : 'var(--accent-green)' }}>
+                {metrics.ndbi_delta > 0 ? '+' : ''}{metrics.ndbi_delta?.toFixed(4)}
+              </span>
+              <span className="metric-label">NDBI Delta</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Multi-Sensor Verification Checklist */}
+      {/* Data Quality Badge */}
+      {evidence.data_quality && (
+        <div className={`evidence-data-quality ${evidence.data_quality === 'real_multispectral' || evidence.data_quality === 'real_sar' ? 'real' : 'proxy'}`}>
+          {evidence.data_quality === 'real_multispectral' ? '🛰️ Real Earth Engine Sentinel-2 Data' :
+           evidence.data_quality === 'real_sar' ? '📡 Real Sentinel-1 SAR Data' :
+           evidence.data_quality === 'stac_metadata' ? '📋 STAC Catalog Metadata Only' :
+           `📊 ${evidence.data_quality}`}
+        </div>
+      )}
+
+      {/* Multi-Sensor Verification Checklist — Dynamic from actual pipeline */}
       <div className="evidence-sensor-checklist">
-        <div className="sensor-check-item active">
-          <span className="check-icon">✓</span>
-          <span>Sentinel-2 Multi-Spectral (10m L2A)</span>
-        </div>
-        <div className="sensor-check-item active">
-          <span className="check-icon">✓</span>
-          <span>Sentinel-1 C-Band SAR (VV/VH Backscatter)</span>
-        </div>
-        <div className="sensor-check-item active">
-          <span className="check-icon">✓</span>
-          <span>Copernicus STAC Co-Registration</span>
-        </div>
+        {evidence.sources?.map((source, idx) => (
+          <div key={idx} className="sensor-check-item active">
+            <span className="check-icon">✓</span>
+            <span>{source}</span>
+          </div>
+        )) || (
+          <>
+            <div className="sensor-check-item active">
+              <span className="check-icon">✓</span>
+              <span>Sentinel-2 Multi-Spectral (10m L2A)</span>
+            </div>
+            <div className="sensor-check-item active">
+              <span className="check-icon">✓</span>
+              <span>Copernicus STAC Co-Registration</span>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Why Engine — Reasoning Chain (Spec §44) */}
+      {evidence.reasoning_chain && (
+        <div className="evidence-why-section">
+          <button
+            className="evidence-btn why-btn"
+            onClick={() => setShowWhyEngine(!showWhyEngine)}
+          >
+            🧠 Why did ORBITAL reach this conclusion?
+          </button>
+          {showWhyEngine && (
+            <div className="why-engine-content">
+              <div className="why-chain">
+                {evidence.reasoning_chain.map((step, idx) => (
+                  <div key={idx} className="why-step">
+                    <span className="why-step-num">{idx + 1}</span>
+                    <div className="why-step-content">
+                      <span className={`why-tag ${step.type}`}>
+                        {step.type === 'observation' ? '📊 Observation' :
+                         step.type === 'inference' ? '🔍 Inference' : '⚠️ Uncertainty'}
+                      </span>
+                      <span className="why-text">{step.text}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Action Buttons: Highlight on Globe & View Audit Trace */}
       <div className="evidence-actions-row">
@@ -104,18 +172,18 @@ export default function EvidenceCard({ evidence }) {
             onClick={() => {
               setChangeMask(evidence.geojson_mask);
             }}
-            title="Render animated change polygons on the 3D globe"
+            title="Render change polygons on the map"
           >
-            🗺️ Highlight Evidence on Globe ({evidence.geojson_mask.features.length} Zones)
+            🗺️ Highlight Evidence ({evidence.geojson_mask.features.length} Zones)
           </button>
         )}
         {audit && (
           <button
             className="evidence-btn secondary"
             onClick={() => setShowAuditModal(!showAuditModal)}
-            title="Inspect ISRO Agent Execution Audit Trace"
+            title="View investigation replay — step-by-step audit trace"
           >
-            📜 Audit Trace ({audit.total_agent_steps || audit.execution_graph?.length} Steps)
+            📜 Investigation Replay ({audit.total_agent_steps || audit.execution_graph?.length} Steps)
           </button>
         )}
       </div>

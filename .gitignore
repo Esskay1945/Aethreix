@@ -5,3 +5,9 @@ dist
 *.log
 .DS_Store
 vite.config.js.timestamp-*
+__pycache__/
+*.pyc
+
+# Local specs/docs excluded from git as requested
+AETHREIX - ORBITAL — SIH26167 Comprehensive Engineering, Feature & Research Build Specification.md
+docs/SYSTEM_DOCUMENTATION.md
