@@ -58,14 +58,32 @@ export default function MapControls() {
           </svg>
         </button>
 
+        {/* 2D / 3D Globe Switcher (Google Earth Mode) */}
         <button
-          className="control-btn"
-          onClick={() => triggerCameraAction('toggleTilt')}
-          title="Toggle 3D Tilt"
-          id="tilt-btn"
+          className={`control-btn ${mapEngine === 'cesium' ? 'active' : ''}`}
+          onClick={() =>
+            dispatch({
+              type: 'SET_MAP_ENGINE',
+              payload: mapEngine === 'cesium' ? 'google' : 'cesium',
+            })
+          }
+          title={mapEngine === 'cesium' ? 'Switch to 2D Map View' : 'Switch to 3D Google Earth Globe'}
+          id="globe-mode-btn"
+          style={mapEngine === 'cesium' ? { background: 'rgba(0, 229, 255, 0.25)', borderColor: '#00e5ff' } : {}}
         >
-          <span style={{ fontSize: '14px', fontWeight: 700 }}>3D</span>
+          <span style={{ fontSize: '15px' }}>{mapEngine === 'cesium' ? '🗺️' : '🌍'}</span>
         </button>
+
+        {mapEngine === 'google' && (
+          <button
+            className="control-btn"
+            onClick={() => triggerCameraAction('toggleTilt')}
+            title="Toggle 3D Tilt"
+            id="tilt-btn"
+          >
+            <span style={{ fontSize: '13px', fontWeight: 700 }}>3D</span>
+          </button>
+        )}
 
         <button
           className="control-btn"
