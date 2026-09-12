@@ -1,12 +1,12 @@
 """
 ORBITAL Specialist Vision & Sensor Models
 
-All specialists are now wired to real Google Earth Engine data.
-No hard-coded values. If data is unavailable, specialists report honestly.
+All specialists are wired to real Google Earth Engine data.
+No hard-coded values. No RGB proxy fallback on the scientific path.
+If data is unavailable, specialists report honestly and trigger abstention.
 """
 
 from typing import Dict, Any
-from server.models.change_detector import run_bitemporal_change_detection
 from server.data.stac_pipeline import query_stac_scenes
 from server.services.earth_engine import (
     get_sentinel2_composite,
@@ -19,8 +19,10 @@ from server.services.earth_engine import (
 class OpticalVQASpecialist:
     """Specialist for single-image visual question answering and scene analysis.
     
-    Now wired to real Earth Engine Sentinel-2 data for actual band statistics
+    Wired to real Earth Engine Sentinel-2 data for actual band statistics
     and spectral indices (NDVI, NDWI, NDBI).
+    
+    Accepts user-drawn AOI geometry to restrict analysis.
     """
     name = "Optical_VQA_Specialist"
     modality = "Optical (Sentinel-2 L2A — Real Multispectral)"
@@ -30,11 +32,15 @@ class OpticalVQASpecialist:
         lon = context.get("lon", 0.0)
         loc_name = context.get("name", "Target Location")
         year = context.get("year", 2024)
+        aoi_geojson = context.get("aoi")  # User-drawn polygon geometry
 
         # ── Try Earth Engine first (real multispectral bands) ──
         ee_status = check_earth_engine_status()
         if ee_status["status"] == "connected":
-            ee_result = get_sentinel2_composite(lat, lon, year, buffer_m=3000)
+            ee_result = get_sentinel2_composite(
+                lat, lon, year, buffer_m=3000,
+                geojson_geom=aoi_geojson
+            )
 
             if ee_result.get("status") == "success":
                 indices = ee_result["indices"]
@@ -65,6 +71,7 @@ class OpticalVQASpecialist:
                     "confidence": 0.92,  # High — real multispectral data
                     "data_source": "earth_engine",
                     "data_quality": "real_multispectral",
+                    "mean_cloud_pct": ee_result.get("mean_cloud_pct"),
                 }
 
             elif ee_result.get("status") == "no_data":
@@ -111,122 +118,131 @@ class OpticalVQASpecialist:
 class ChangeDetectionSpecialist:
     """Specialist for bi-temporal and N-temporal pixel-level change detection.
     
-    Now uses real Earth Engine bi-temporal index comparison when available.
-    Falls back to STAC + RGB proxy when EE is not connected.
+    Uses real Earth Engine pixel-level bi-temporal analysis with:
+    - Pixel-level ΔNDVI, ΔNDBI, ΔNDWI differencing
+    - Morphological cleanup and connected-component filtering
+    - Vectorization via reduceToVectors() into real GeoJSON polygons
+    
+    SCIENTIFIC HONESTY: If Earth Engine is not connected, this specialist
+    explicitly abstains rather than falling back to the RGB proxy.
     """
     name = "BiTemporal_Change_Specialist"
-    modality = "Multi-Temporal Optical (Earth Engine Bi-Temporal Analysis)"
+    modality = "Multi-Temporal Optical (Earth Engine Pixel-Level Analysis)"
 
     def execute(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         lat = context.get("lat", 19.3)
         lon = context.get("lon", 73.209)
         from_year = context.get("from_year", 2020)
         to_year = context.get("to_year", 2024)
+        aoi_geojson = context.get("aoi")  # User-drawn polygon geometry
 
-        # ── Try Earth Engine bi-temporal analysis first ──
+        # ── SCIENTIFIC PATH: Earth Engine pixel-level analysis ──
         ee_status = check_earth_engine_status()
-        if ee_status["status"] == "connected":
-            ee_result = get_bitemporal_indices(lat, lon, from_year, to_year, buffer_m=3000)
+        if ee_status["status"] != "connected":
+            # HONEST ABSTENTION: Do NOT fall back to RGB proxy
+            return {
+                "specialist": self.name,
+                "modality": self.modality,
+                "status": "not_available",
+                "reason": (
+                    "Data Unavailable: Real multispectral change detection requires "
+                    "Google Earth Engine. RGB proxy analysis has been disabled to "
+                    "maintain scientific integrity per SIH26167 specification."
+                ),
+                "data_status": "none",
+                "from_year": from_year,
+                "to_year": to_year,
+                "metrics": {},
+                "transitions": [],
+                "geojson_mask": {"type": "FeatureCollection", "features": []},
+                "change_polygons": {"type": "FeatureCollection", "features": []},
+                "confidence": 0.0,
+            }
 
-            if ee_result.get("status") == "success":
-                deltas = ee_result["deltas"]
-                baseline = ee_result["baseline"]
-                target = ee_result["target"]
-
-                # Compute quantitative change metrics from real indices
-                ndvi_change = deltas["ndvi_change"]
-                ndbi_change = deltas["ndbi_change"]
-                ndwi_change = deltas["ndwi_change"]
-
-                # Estimate area affected (within 3km buffer = ~28.27 km²)
-                aoi_area_km2 = 3.14159 * (3.0 ** 2)  # pi * r²
-
-                # Classify transitions from real index changes
-                transitions = _compute_transitions(ndvi_change, ndbi_change, ndwi_change, aoi_area_km2)
-                total_change_pct = abs(ndvi_change * 100) + abs(ndbi_change * 100)
-
-                metrics = {
-                    "total_changed_area_sq_km": round(aoi_area_km2 * min(total_change_pct / 100, 1.0), 2),
-                    "total_change_percentage": round(total_change_pct, 1),
-                    "mean_ndvi_baseline": baseline["ndvi"],
-                    "mean_ndvi_target": target["ndvi"],
-                    "mean_ndbi_baseline": baseline["ndbi"],
-                    "mean_ndbi_target": target["ndbi"],
-                    "mean_ndwi_baseline": baseline["ndwi"],
-                    "mean_ndwi_target": target["ndwi"],
-                    "ndvi_delta": ndvi_change,
-                    "ndbi_delta": ndbi_change,
-                    "ndwi_delta": ndwi_change,
-                    "built_up_expansion_ha": round(max(0, ndbi_change) * aoi_area_km2 * 100, 1),
-                    "vegetation_loss_ha": round(max(0, -ndvi_change) * aoi_area_km2 * 100, 1),
-                    "otsu_spectral_threshold": "N/A (EE pixel-level analysis)",
-                }
-
-                # Build a GeoJSON change mask (simplified — AOI bounding box)
-                geojson_mask = {
-                    "type": "FeatureCollection",
-                    "bbox": [lon - 0.027, lat - 0.027, lon + 0.027, lat + 0.027],
-                    "features": [
-                        {
-                            "type": "Feature",
-                            "properties": {
-                                "change_type": t["from_class"] + " -> " + t["to_class"],
-                                "area_ha": t["area_ha"],
-                                "confidence": t["confidence"],
-                            },
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": [[
-                                    [lon - 0.015, lat - 0.015],
-                                    [lon + 0.015, lat - 0.015],
-                                    [lon + 0.015, lat + 0.015],
-                                    [lon - 0.015, lat + 0.015],
-                                    [lon - 0.015, lat - 0.015],
-                                ]],
-                            },
-                        }
-                        for t in transitions
-                    ],
-                }
-
-                return {
-                    "specialist": self.name,
-                    "modality": self.modality,
-                    "status": "success",
-                    "data_status": "real_multispectral",
-                    "from_year": from_year,
-                    "to_year": to_year,
-                    "metrics": metrics,
-                    "transitions": transitions,
-                    "geojson_mask": geojson_mask,
-                    "confidence": 0.88,
-                }
-
-        # ── Fallback: RGB proxy via change_detector ──
-        result = run_bitemporal_change_detection(
-            lat=lat, lon=lon, year_a=from_year, year_b=to_year, radius_km=3.5
+        # ── Run real pixel-level change detection ──
+        ee_result = get_bitemporal_indices(
+            lat, lon, from_year, to_year, buffer_m=3000,
+            geojson_geom=aoi_geojson
         )
-        data_status = result.get("data_status", "unknown")
+
+        if ee_result.get("status") != "success":
+            return {
+                "specialist": self.name,
+                "modality": self.modality,
+                "status": ee_result.get("status", "error"),
+                "reason": ee_result.get("error", "Unknown error"),
+                "data_status": "none",
+                "from_year": from_year,
+                "to_year": to_year,
+                "metrics": {},
+                "transitions": [],
+                "geojson_mask": {"type": "FeatureCollection", "features": []},
+                "change_polygons": {"type": "FeatureCollection", "features": []},
+                "confidence": 0.0,
+            }
+
+        deltas = ee_result["deltas"]
+        baseline = ee_result["baseline"]
+        target = ee_result["target"]
+        provenance = ee_result.get("provenance", {})
+
+        # Compute quantitative change metrics from real indices
+        ndvi_change = deltas["ndvi_change"]
+        ndbi_change = deltas["ndbi_change"]
+        ndwi_change = deltas["ndwi_change"]
+
+        # Estimate area affected (within 3km buffer = ~28.27 km²)
+        aoi_area_km2 = 3.14159 * (3.0 ** 2)  # pi * r²
+
+        # Classify transitions from real index changes
+        transitions = _compute_transitions(ndvi_change, ndbi_change, ndwi_change, aoi_area_km2)
+        total_change_pct = abs(ndvi_change * 100) + abs(ndbi_change * 100)
+
+        # Use the real pixel-derived polygons from Earth Engine
+        change_polygons = ee_result.get("change_polygons", {"type": "FeatureCollection", "features": []})
+        polygon_count = ee_result.get("polygon_count", len(change_polygons.get("features", [])))
+
+        metrics = {
+            "total_changed_area_sq_km": round(aoi_area_km2 * min(total_change_pct / 100, 1.0), 2),
+            "total_change_percentage": round(total_change_pct, 1),
+            "mean_ndvi_baseline": baseline["ndvi"],
+            "mean_ndvi_target": target["ndvi"],
+            "mean_ndbi_baseline": baseline["ndbi"],
+            "mean_ndbi_target": target["ndbi"],
+            "mean_ndwi_baseline": baseline["ndwi"],
+            "mean_ndwi_target": target["ndwi"],
+            "ndvi_delta": ndvi_change,
+            "ndbi_delta": ndbi_change,
+            "ndwi_delta": ndwi_change,
+            "built_up_expansion_ha": round(max(0, ndbi_change) * aoi_area_km2 * 100, 1),
+            "vegetation_loss_ha": round(max(0, -ndvi_change) * aoi_area_km2 * 100, 1),
+            "change_polygon_count": polygon_count,
+        }
 
         return {
             "specialist": self.name,
-            "modality": "Multi-Temporal Optical (RGB Proxy — CVA Differencing)",
+            "modality": self.modality,
             "status": "success",
-            "data_status": data_status,
+            "data_status": "real_multispectral",
+            "data_quality": "real_multispectral",
             "from_year": from_year,
             "to_year": to_year,
-            "metrics": result["quantitative_results"],
-            "transitions": result["land_cover_transitions"],
-            "geojson_mask": result["geojson_change_mask"],
-            "confidence": 0.85 if data_status == "real" else 0.40,
+            "metrics": metrics,
+            "transitions": transitions,
+            "geojson_mask": change_polygons,  # Real pixel-derived polygons
+            "change_polygons": change_polygons,
+            "polygon_count": polygon_count,
+            "provenance": provenance,
+            "confidence": 0.88,
         }
 
 
 class SARFusionSpecialist:
     """Specialist for Sentinel-1 SAR structural verification.
     
-    Now wired to real Earth Engine Sentinel-1 GRD data.
+    Wired to real Earth Engine Sentinel-1 GRD data.
     Returns actual VV/VH backscatter and physical surface interpretation.
+    Accepts user-drawn AOI geometry.
     """
     name = "SAR_Fusion_Specialist"
     modality = "Sentinel-1 C-Band SAR (VV/VH Polarization)"
@@ -235,11 +251,15 @@ class SARFusionSpecialist:
         lat = context.get("lat", 19.3)
         lon = context.get("lon", 73.209)
         year = context.get("year", 2024)
+        aoi_geojson = context.get("aoi")  # User-drawn polygon geometry
 
         # ── Try Earth Engine for real SAR data ──
         ee_status = check_earth_engine_status()
         if ee_status["status"] == "connected":
-            sar_result = get_sentinel1_sar(lat, lon, year, buffer_m=3000)
+            sar_result = get_sentinel1_sar(
+                lat, lon, year, buffer_m=3000,
+                geojson_geom=aoi_geojson
+            )
 
             if sar_result.get("status") == "success":
                 bs = sar_result["backscatter"]
@@ -248,7 +268,6 @@ class SARFusionSpecialist:
                 ratio = bs["vv_vh_ratio_db"]
 
                 # Cross-validate optical findings with SAR
-                optical_status = optical_findings.get("status", "unknown")
                 verification = _cross_validate_sar_optical(vv, vh, optical_findings)
 
                 return {

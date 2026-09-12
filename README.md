@@ -114,66 +114,71 @@ graph TD
 ## 📂 Repository Structure
 
 ```
-Athreix/
-├── server/                                # FastAPI Python Backend
-│   ├── main.py                            # API routes, SSE streaming, Earth Engine endpoints
-│   ├── config.py                          # Environment settings & API keys
-│   ├── agent/
-│   │   ├── orchestrator.py                # ReAct agent, DAG execution, intent parsing
-│   │   ├── specialists.py                 # Optical, SAR, Change, & Geolocation specialists
-│   │   ├── fusion.py                      # Calibrated confidence & honest abstention
-│   │   └── audit.py                       # Audit trail logging & execution history
-│   ├── services/
-│   │   ├── earth_engine.py                # Google Earth Engine core service
-│   │   └── location.py                    # Nominatim, DMS, Plus Codes geocoding
-│   ├── data/
-│   │   ├── spectral_math.py               # Remote sensing math & Otsu thresholding
-│   │   └── stac_pipeline.py               # Copernicus STAC API client
-│   └── models/
-│       └── change_detector.py             # CVA change detection pipeline
-│
-├── src/                                   # React 18 + Vite Frontend
-│   ├── App.jsx                            # 5-zone application shell
-│   ├── main.jsx                           # Application entrypoint
-│   ├── index.css                          # Full design system & glassmorphism styling
-│   ├── context/
-│   │   └── AthreixContext.jsx             # Unified state (AOI, Mission, Layers, Temporal)
-│   ├── components/
-│   │   ├── GoogleMapViewer.jsx            # High-precision map with EE tile integration
-│   │   ├── GlobeViewer.jsx                # Lazy-loaded CesiumJS 3D spherical globe
-│   │   ├── ChatPanel.jsx                  # 3-route query system (image/analysis/chat)
-│   │   ├── ChatMessage.jsx                # Interactive chat bubble renderer
-│   │   ├── EvidenceCard.jsx               # Data-driven evidence, Why engine, audit replay
-│   │   ├── SearchBar.jsx                  # Multimodal search: locations, coords, missions
-│   │   ├── TimelinePanel.jsx              # Sensor-aware timeline archive
-│   │   ├── StreetViewHUD.jsx              # 360° ground-truth street view
-│   │   ├── analysis/
-│   │   │   ├── DrawAnalyze.jsx            # Instant AOI spectral statistics
-│   │   │   └── AnomalyScanner.jsx         # Proactive viewport anomaly scanner
-│   │   ├── evidence/
-│   │   │   └── ChangeMatrix.jsx           # Land cover transition matrix
-│   │   ├── map/
-│   │   │   ├── AOIDrawer.jsx              # Vector drawing tools (Point, Radius, Rect, Polygon)
-│   │   │   ├── LayerManager.jsx           # 4 base, 6 context, 9 analysis overlays with opacity
-│   │   │   └── MapControls.jsx            # Unified zoom, 2D/3D toggle, locate, draw tools
-│   │   ├── mission/
-│   │   │   └── MissionTracker.jsx         # Live SSE mission DAG execution progress
-│   │   ├── reports/
-│   │   │   └── ReportGenerator.jsx        # Export in JSON, GeoJSON, CSV, Markdown
-│   │   └── temporal/
-│   │       └── TemporalCompare.jsx        # Swipe, flicker, side-by-side comparison modes
-│   └── services/
-│       ├── AnalysisEngine.js              # Client-side analysis coordinator
-│       ├── EODataService.js               # STAC satellite availability client
-│       ├── MissionService.js              # SSE streaming mission client
-│       └── MistralService.js              # Fast streaming GEOINT LLM client
-│
-├── public/                                # Static assets & Cesium workers
-├── requirements.txt                       # Python dependencies
-├── package.json                           # Node.js dependencies & scripts
-├── vite.config.js                         # Vite build & Cesium code-splitting config
-├── docker-compose.yml                     # Multi-container deployment configuration
-└── README.md                              # Complete system documentation
+ Athreix/
+ ├── server/                                # FastAPI Python Backend
+ │   ├── main.py                            # API routes, SSE streaming, Earth Engine endpoints
+ │   ├── config.py                          # Environment settings & API keys
+ │   ├── agent/
+ │   │   ├── orchestrator.py                # Dynamic DAG Planner, intent parsing, ReAct loop
+ │   │   ├── specialists.py                 # Optical, SAR, Change, & Geolocation specialists
+ │   │   ├── object_detection.py            # Object detection specialist (YOLOv8-OBB / Faster R-CNN)
+ │   │   ├── fusion.py                      # Calibrated evidential fusion & honest abstention
+ │   │   └── audit.py                       # Audit trail logging & execution history
+ │   ├── benchmarks/
+ │   │   ├── __init__.py                    # Benchmark package
+ │   │   └── benchmark_runner.py            # Research evaluation suite (F1, IoU, ECE, Ablation)
+ │   ├── services/
+ │   │   ├── earth_engine.py                # GEE core: composites, SAR, pixel spectrum, reduceToVectors
+ │   │   └── location.py                    # NLP hierarchy, DMS, Plus Codes, Nominatim geocoding
+ │   ├── data/
+ │   │   ├── spectral_math.py               # Remote sensing math & Otsu thresholding
+ │   │   └── stac_pipeline.py               # Copernicus STAC API client
+ │   └── models/
+ │       ├── change_model.py                # Deep learning change detection (U-Net / Siamese)
+ │       └── change_detector.py             # CVA change detection pipeline
+ │
+ ├── src/                                   # React 18 + Vite Frontend
+ │   ├── App.jsx                            # 5-zone application shell
+ │   ├── main.jsx                           # Application entrypoint
+ │   ├── index.css                          # Full design system & glassmorphism styling
+ │   ├── context/
+ │   │   └── AthreixContext.jsx             # Unified state (AOI, Mission, Layers, Temporal)
+ │   ├── components/
+ │   │   ├── GoogleMapViewer.jsx            # High-precision map with EE tile integration
+ │   │   ├── GlobeViewer.jsx                # Lazy-loaded CesiumJS 3D spherical globe
+ │   │   ├── ChatPanel.jsx                  # 3-route query system (image/analysis/chat)
+ │   │   ├── ChatMessage.jsx                # Interactive chat bubble renderer
+ │   │   ├── EvidenceCard.jsx               # Data-driven evidence, Why engine, audit replay
+ │   │   ├── SearchBar.jsx                  # Multimodal search: locations, coords, missions
+ │   │   ├── TimelinePanel.jsx              # Sensor-aware timeline archive
+ │   │   ├── StreetViewHUD.jsx              # 360° ground-truth street view
+ │   │   ├── analysis/
+ │   │   │   ├── DrawAnalyze.jsx            # Instant AOI spectral statistics
+ │   │   │   └── AnomalyScanner.jsx         # Proactive viewport anomaly scanner
+ │   │   ├── evidence/
+ │   │   │   └── ChangeMatrix.jsx           # Land cover transition matrix
+ │   │   ├── map/
+ │   │   │   ├── AOIDrawer.jsx              # Vector drawing tools (Point, Radius, Rect, Polygon)
+ │   │   │   ├── LayerManager.jsx           # 4 base, 6 context, 9 analysis overlays with opacity
+ │   │   │   └── MapControls.jsx            # Unified zoom, 2D/3D toggle, locate, draw tools
+ │   │   ├── mission/
+ │   │   │   └── MissionTracker.jsx         # Live SSE mission DAG execution progress
+ │   │   ├── reports/
+ │   │   │   └── ReportGenerator.jsx        # Export in JSON, GeoJSON, CSV, Markdown
+ │   │   └── temporal/
+ │   │       └── TemporalCompare.jsx        # Swipe, flicker, side-by-side comparison modes
+ │   └── services/
+ │       ├── AnalysisEngine.js              # Client-side analysis coordinator
+ │       ├── EODataService.js               # STAC satellite availability client
+ │       ├── MissionService.js              # SSE streaming mission client
+ │       └── MistralService.js              # Fast streaming GEOINT LLM client
+ │
+ ├── public/                                # Static assets & Cesium workers
+ ├── requirements.txt                       # Python dependencies
+ ├── package.json                           # Node.js dependencies & scripts
+ ├── vite.config.js                         # Vite build & Cesium code-splitting config
+ ├── docker-compose.yml                     # Multi-container deployment configuration
+ └── README.md                              # Complete system documentation
 ```
 
 ---
@@ -247,6 +252,9 @@ Navigate to `http://localhost:5173`.
 | `/api/ee/sar` | `POST` | Fetches a Sentinel-1 SAR backscatter composite tile URL |
 | `/api/ee/indices` | `POST` | Computes all 8 radiometric indices for an arbitrary AOI polygon |
 | `/api/ee/change` | `POST` | Computes bi-temporal change difference mask and returns GeoJSON polygons |
+| `/api/ee/pixel-spectrum` | `POST` | Extracts BOA surface reflectance across all 13 Sentinel-2 bands at coordinate |
+| `/api/benchmark/run` | `POST` | Executes research evaluation suite (F1, IoU, ECE, latency) |
+| `/api/benchmark/ablation` | `POST` | Runs ablation experiments isolating SAR, temporal, and fusion impact |
 | `/api/location/search` | `GET` | Geocoding service supporting place names, DMS, decimal degrees, and Plus Codes |
 | `/api/reports/export` | `POST` | Formats and downloads mission intelligence as JSON, GeoJSON, CSV, or Markdown |
 

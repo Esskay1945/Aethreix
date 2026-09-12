@@ -177,6 +177,7 @@ from server.services.earth_engine import (
     get_bitemporal_indices,
     get_ee_tile_url,
     get_enhanced_indices,
+    get_pixel_spectrum,
 )
 
 
@@ -231,6 +232,39 @@ def ee_tiles(req: EETileRequest):
 def ee_enhanced(req: EERequest):
     """Get all 8 spectral indices (NDVI, NDWI, NDBI, EVI, SAVI, NDMI, NBR, MNDWI)."""
     return get_enhanced_indices(req.lat, req.lon, req.year, req.buffer_m)
+
+
+class PixelSpectrumRequest(BaseModel):
+    lat: float
+    lon: float
+    year: int = 2024
+    date_window_days: int = 30
+
+
+@app.post("/api/ee/pixel-spectrum")
+def ee_pixel_spectrum(req: PixelSpectrumRequest):
+    """Get spectral signature at a single pixel across all 13 Sentinel-2 bands."""
+    return get_pixel_spectrum(req.lat, req.lon, req.year, req.date_window_days)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BENCHMARK RUNNER — Research Evaluation Suite
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/benchmark/run")
+def run_benchmark():
+    """Run the research benchmark suite with sample test cases."""
+    from server.benchmarks.benchmark_runner import BenchmarkRunner, SAMPLE_TEST_CASES
+    runner = BenchmarkRunner()
+    return runner.run_full_benchmark(SAMPLE_TEST_CASES)
+
+
+@app.get("/api/benchmark/ablation")
+def run_ablation():
+    """Run ablation experiments (full, without SAR, without temporal, etc.)."""
+    from server.benchmarks.benchmark_runner import BenchmarkRunner, SAMPLE_TEST_CASES
+    runner = BenchmarkRunner()
+    return runner.run_ablation(SAMPLE_TEST_CASES)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
